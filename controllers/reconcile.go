@@ -68,9 +68,6 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	multiClusterHub.Status.HubConditions = filterOutConditionWithSubstring(multiClusterHub.Status.HubConditions,
 		string(operatorv1.ComponentFailure))
 
-	// Check if any deprecated fields are present within the multiClusterHub spec.
-	r.CheckDeprecatedFieldUsage(multiClusterHub)
-
 	// Check to see if upgradeable
 	upgrade, err := r.setOperatorUpgradeableStatus(ctx, multiClusterHub)
 	if err != nil {
@@ -185,8 +182,7 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	/*
-		In ACM 2.13, we are required to get the default storage class name for the Edge Manager (aka Flight-Control)
-		component. To ensure that we can pass the default storage class, we will store it as an environment variable.
+		Get the default storage class name and store it as an environment variable for components that need it.
 	*/
 	if result, err = r.SetDefaultStorageClassName(ctx, multiClusterHub); err != nil {
 		r.Log.Error(err, "failed to set the default StorageClass name")
@@ -276,15 +272,6 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// 2.6 -> 2.7 upgrade logic
-	// There are ClusterManagementAddOns in the GRC appsub that need to be preserved when deleting the helmrelease
-	// To stop helm from removing them we will remove the finalizer on the GRC helmrelease, delete the appsub,
-	// and clean things up ourselves
-	err = r.cleanupGRCAppsub(multiClusterHub)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// Deploy appsub operator component
 	if multiClusterHub.Enabled(operatorv1.Appsub) {
 		result, err = r.ensureComponent(ctx, multiClusterHub, operatorv1.Appsub, r.CacheSpec, stsEnabled)
@@ -293,21 +280,6 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 	if result != (ctrl.Result{}) {
 		return result, err
-	}
-
-	// Remove existing appsubs and helmreleases if present from upgrade
-	result, err = r.ensureAppsubsGone(multiClusterHub)
-	if result != (ctrl.Result{}) {
-		return result, err
-	}
-
-	/*
-	   Remove existing service and servicemonitor configurations, if present from upgrade. In ACM 2.2, operator-sdk
-	   generated configurations for the MCH operator to be collecting metrics. In later releases, these resources are
-	   no longer available; therefore, we need to explicitly remove them from the upgrade configuration.
-	*/
-	for _, kind := range operatorv1.GetLegacyConfigKind() {
-		_ = r.removeLegacyConfigurations(ctx, "openshift-monitoring", kind)
 	}
 
 	if utils.ProxyEnvVarsAreSet() {
@@ -330,6 +302,13 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return result, fmt.Errorf("failed to find pullsecret: %s", err)
 	}
 
+	/*
+		In the ACM architectural design, MCH is responsible for deploying or adopting MCE. MCH is the "hub of the hub"
+		and the central point of management for the ACM deployment, while MCE is a critical component that provides
+		multi-cluster management capabilities. By having MCH deploy or adopt MCE, we ensure a streamlined and cohesive
+		deployment process where MCE must be deployed before any other components to ensure the necessary CRDs are
+		present for the other components to deploy successfully.
+	*/
 	result, err = r.ensureMultiClusterEngine(ctx, multiClusterHub)
 	if result != (ctrl.Result{}) {
 		return result, err
@@ -350,6 +329,11 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return result, err
 	}
 
+	/*
+		Create the MCH operator's monitoring infrastructure. These resources enable Prometheus to collect
+		metrics from the operator for observability and alerting. The Service exposes the metrics endpoint,
+		and the ServiceMonitor tells Prometheus how to scrape it.
+	*/
 	result, err = r.createMetricsService(ctx, multiClusterHub)
 	if err != nil {
 		return result, err
@@ -378,20 +362,53 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return result, err
 	}
 
+	// Migrate components from MCH to MCE (e.g., cluster-permission in 2.17). Transfer cluster-scoped
+	// resources to MCE ownership, wait for MCE to adopt them, then clean up namespace-scoped resources.
+	for component := range migratedComponentDeployments {
+		if !multiClusterHub.ComponentPresent(component) || !multiClusterHub.Enabled(component) {
+			continue
+		}
+		// Relabel cluster-scoped resources with MCE ownership
+		result, err = r.transferClusterResourcesToMCE(ctx, multiClusterHub, component, r.CacheSpec, stsEnabled)
+		if result != (ctrl.Result{}) || err != nil {
+			return result, err
+		}
+	}
+
+	// Wait for MCE to adopt components (show as Available in MCE status)
+	adopted, err := r.waitForMigratedComponentsAdopted(ctx, multiClusterHub)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !adopted {
+		r.Log.Info("Waiting for MCE to adopt migrated components before cleanup")
+		return ctrl.Result{RequeueAfter: resyncPeriod}, nil
+	}
+
+	// Clean up namespace-scoped resources and prune from MCH CR
+	result, err = r.ensureMigratedComponentsCleanup(ctx, multiClusterHub, stsEnabled)
+	if result != (ctrl.Result{}) || err != nil {
+		return result, err
+	}
+
 	if !multiClusterHub.Spec.DisableHubSelfManagement {
 		result, err = r.ensureKlusterletAddonConfig(multiClusterHub)
 		if result != (ctrl.Result{}) || err != nil {
 			return result, err
 		}
 	}
-	// iam-policy-controller was removed in 2.11
-	result, err = r.ensureNoClusterManagementAddOn(multiClusterHub, operatorv1.IamPolicyController)
-	if err != nil {
-		return result, err
-	}
 
 	// Install the rest of the subscriptions in no particular order
 	for _, c := range operatorv1.MCHComponents {
+		// Skip components that have been migrated to MCE — these are already
+		// handled by ensureMigratedComponentsCleanup above. Without this guard,
+		// ensureNoComponent would delete cluster-scoped resources (ClusterRole,
+		// ClusterRoleBinding) that MCE manages, creating an infinite
+		// delete/recreate loop.
+		if _, migrated := migratedComponentDeployments[c]; migrated {
+			continue
+		}
+
 		result, err = r.ensureComponentOrNoComponent(ctx, multiClusterHub, c, r.CacheSpec, ocpConsole, stsEnabled)
 
 		if result != (ctrl.Result{}) {
@@ -399,13 +416,6 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	// Cleanup unused resources once components up-to-date
-	if r.ComponentsAreRunning(multiClusterHub, ocpConsole, stsEnabled) {
-		result, err = r.ensureRemovalsGone(multiClusterHub)
-		if result != (ctrl.Result{}) {
-			return result, err
-		}
-	}
 	if upgrade {
 		return ctrl.Result{RequeueAfter: resyncPeriod}, nil
 	}

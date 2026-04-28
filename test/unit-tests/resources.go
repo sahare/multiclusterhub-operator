@@ -7,16 +7,13 @@ import (
 	operatorsv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
 
 	configv1 "github.com/openshift/api/config/v1"
-	promv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	mcev1 "github.com/stolostron/backplane-operator/api/v1"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ocmapi "open-cluster-management.io/api/addon/v1alpha1"
 
 	subv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 const (
@@ -152,29 +149,6 @@ func NoComponentMCH() operatorsv1.MultiClusterHub {
 	}
 }
 
-func InsightsMCH() operatorsv1.MultiClusterHub {
-	return operatorsv1.MultiClusterHub{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      MulticlusterhubName,
-			Namespace: MulticlusterhubNamespace,
-		},
-		Spec: operatorsv1.MultiClusterHubSpec{
-			Overrides: &operatorsv1.Overrides{
-				Components: []operatorsv1.ComponentConfig{
-					{
-						Name:    operatorsv1.Insights,
-						Enabled: true,
-					},
-					{
-						Name:    operatorsv1.ClusterBackup,
-						Enabled: false,
-					},
-				},
-			},
-		},
-	}
-}
-
 func OCPIngress() *configv1.Ingress {
 	return &configv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
@@ -217,63 +191,4 @@ func MonitoringNamespace() *corev1.Namespace {
 			Name: "openshift-monitoring",
 		},
 	}
-}
-
-func SampleService(m *operatorsv1.MultiClusterHub) *corev1.Service {
-	const Port = 3030
-
-	s := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "sample-service",
-			Namespace: m.Namespace,
-		},
-		Spec: corev1.ServiceSpec{
-			Ports: []corev1.ServicePort{{
-				Protocol:   corev1.ProtocolTCP,
-				Port:       int32(Port),
-				TargetPort: intstr.FromInt(Port),
-			}},
-			Type: corev1.ServiceTypeClusterIP,
-		},
-	}
-
-	return s
-}
-
-func SampleClusterManagementAddOn(component string) *ocmapi.ClusterManagementAddOn {
-	addonName, err := operatorsv1.GetClusterManagementAddonName(component)
-	if err != nil {
-		addonName = "unknown"
-	}
-
-	addon := &ocmapi.ClusterManagementAddOn{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: addonName,
-		},
-		Spec: ocmapi.ClusterManagementAddOnSpec{
-			AddOnMeta: ocmapi.AddOnMeta{
-				Description: "Sample addon description",
-				DisplayName: component,
-			},
-		},
-	}
-
-	return addon
-}
-
-func SampleServiceMonitor(component string, namespace string) *promv1.ServiceMonitor {
-	smName, err := operatorsv1.GetLegacyServiceMonitorName(component)
-	if err != nil {
-		smName = "unknown"
-	}
-
-	sm := &promv1.ServiceMonitor{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      smName,
-			Namespace: namespace,
-		},
-		Spec: promv1.ServiceMonitorSpec{},
-	}
-
-	return sm
 }

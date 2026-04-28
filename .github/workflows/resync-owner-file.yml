@@ -20,6 +20,7 @@ jobs:
     strategy:
       matrix:
         branch: [
+            'release-2.16',
             'release-2.15',
             'release-2.14',
             'release-2.13',
@@ -33,14 +34,14 @@ jobs:
       - name: Checkout target branch
         uses: actions/checkout@v6
         with:
-          token: ${{ secrets.HUB_OPERATOR_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           ref: ${{ matrix.branch }}
 
       # Checkout the main branch to get the latest OWNERS file
       - name: Checkout main branch to get OWNRES file
         uses: actions/checkout@v6
         with:
-          token: ${{ secrets.HUB_OPERATOR_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           ref: main
           path: workflow
           sparse-checkout: |

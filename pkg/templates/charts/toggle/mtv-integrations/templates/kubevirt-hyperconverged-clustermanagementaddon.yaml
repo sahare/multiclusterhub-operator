@@ -1,4 +1,4 @@
-apiVersion: addon.open-cluster-management.io/v1alpha1
+apiVersion: addon.open-cluster-management.io/v1beta1
 kind: ClusterManagementAddOn
 metadata:
   annotations:
@@ -8,18 +8,12 @@ spec:
   addOnMeta:
     description: Kubevirt Hyperconverged
     displayName: Kubevirt Hyperconverged
+  defaultConfigs:
+  - group: addon.open-cluster-management.io
+    name: kubevirt-hyperconverged
+    resource: addontemplates
   installStrategy:
     placements:
     - name: openshift-cnv
       namespace: '{{ default "open-cluster-management" .Values.global.namespace }}'
     type: Placements
-  supportedConfigs:
-  - defaultConfig:
-      name: kubevirt-hyperconverged
-    group: addon.open-cluster-management.io
-    resource: addontemplates
-  - defaultConfig:
-      name: cnv-hco-config
-      namespace: '{{ .Values.global.namespace }}'
-    group: addon.open-cluster-management.io
-    resource: addondeploymentconfigs

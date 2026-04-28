@@ -1,9 +1,7 @@
 package v1
 
 import (
-	"errors"
 	"fmt"
-	"os"
 )
 
 type ResourceGVK struct {
@@ -21,11 +19,10 @@ const (
 	Appsub                    string = "app-lifecycle"
 	ClusterBackup             string = "cluster-backup"
 	ClusterLifecycle          string = "cluster-lifecycle"
-	ClusterPermission         string = "cluster-permission"
+	ClusterPermission         string = "cluster-permission" // Deprecated in ACM 2.17, moved to MCE 2.17.
 	Console                   string = "console"
-	EdgeManager               string = "edge-manager"
-	EdgeManagerPreview        string = "edge-manager-preview"
 	MTVIntegrationsPreview    string = "cnv-mtv-integrations-preview"
+	MTVIntegrations           string = "cnv-mtv-integrations"
 	FineGrainedRbac           string = "fine-grained-rbac"
 	FineGrainedRbacPreview    string = "fine-grained-rbac-preview"
 	GRC                       string = "grc"
@@ -49,6 +46,7 @@ const (
 	MCEClusterAPIProviderAWSPreview     string = "cluster-api-provider-aws-preview"
 	MCEClusterLifecycle                 string = "cluster-lifecycle-mce"
 	MCEClusterManager                   string = "cluster-manager"
+	MCEClusterPermission                string = "cluster-permission"
 	MCEClusterProxyAddon                string = "cluster-proxy-addon"
 	MCEConsole                          string = "console-mce"
 	MCEDiscovery                        string = "discovery"
@@ -70,11 +68,10 @@ var MCHComponents = []string{
 	Appsub,
 	ClusterBackup,
 	ClusterLifecycle,
-	ClusterPermission,
+	ClusterPermission, // Migrated to MCE in 2.17, but must remain here for webhook validation (ValidateCreate/ValidateUpdate).
 	Console,
-	EdgeManagerPreview,
-	FineGrainedRbacPreview,
-	MTVIntegrationsPreview,
+	FineGrainedRbac,
+	MTVIntegrations,
 	GRC,
 	Insights,
 	MultiClusterEngine, // Adding MCE component to ensure that the component is validated by the webhook.
@@ -95,6 +92,7 @@ var MCEComponents = []string{
 	MCEClusterAPIProviderAWSPreview,
 	MCEClusterLifecycle,
 	MCEClusterManager,
+	MCEClusterPermission,
 	MCEClusterProxyAddon,
 	MCEConsole,
 	MCEDiscovery,
@@ -106,7 +104,6 @@ var MCEComponents = []string{
 	MCEImageBasedInstallOperatorPreview,
 	MCEManagedServiceAccount,
 	MCEManagedServiceAccountPreview,
-	MCEManagedServiceAccount,
 	MCEServerFoundation,
 }
 
@@ -147,33 +144,6 @@ var RequiredSTSCRDs = []ResourceGVK{
 	},
 }
 
-/*
-LegacyConfigKind is a slice of strings that represents the legacy resource kinds
-supported by the Operator SDK and Prometheus. These kinds include "PrometheusRule", "Service",
-and "ServiceMonitor".
-*/
-var LegacyConfigKind = []string{"PrometheusRule", "Service", "ServiceMonitor"}
-
-// MCHLegacyPrometheusRules is a map that associates certain component names with their corresponding prometheus rules.
-var MCHLegacyPrometheusRules = map[string]string{
-	Console: "acm-console-prometheus-rules",
-	GRC:     "ocm-grc-policy-propagator-metrics",
-	// Add other components here when PrometheusRules is required.
-}
-
-// MCHLegacyServiceMonitors is a map that associates certain component names with their corresponding service monitors.
-var MCHLegacyServiceMonitors = map[string]string{
-	Console:  "console-monitor",
-	GRC:      "ocm-grc-policy-propagator-metrics",
-	Insights: "acm-insights",
-	// Add other components here when ServiceMonitors is required.
-}
-
-// MCHLegacyServices is a map that associates certain component names with their corresponding services.
-var MCHLegacyServices = map[string]string{
-	// Add other components here when Services is required.
-}
-
 // ClusterManagementAddOns is a map that associates certain component names with their corresponding add-ons.
 var ClusterManagementAddOns = map[string]string{
 	IamPolicyController: "iam-policy-controller",
@@ -184,13 +154,15 @@ var ClusterManagementAddOns = map[string]string{
 /*
 GetDefaultEnabledComponents returns a slice of default enabled component names.
 It is expected to be used to get a list of components that are enabled by default.
+
+Removed components:
+- Repo: Removed in ACM 2.7.0
+- ClusterPermission: Removed in ACM 2.17 (migrated to MCE)
 */
 func GetDefaultEnabledComponents() ([]string, error) {
 	defaultEnabledComponents := []string{
-		// Repo,
 		Appsub,
 		ClusterLifecycle,
-		ClusterPermission,
 		Console,
 		GRC,
 		Insights,
@@ -211,10 +183,9 @@ It is expected to be used to get a list of components that are disabled by defau
 func GetDefaultDisabledComponents() ([]string, error) {
 	defaultDisabledComponents := []string{
 		ClusterBackup,
-		EdgeManagerPreview,
-		FineGrainedRbacPreview,
+		FineGrainedRbac,
 		SiteConfig,
-		MTVIntegrationsPreview,
+		MTVIntegrations,
 	}
 	return defaultDisabledComponents, nil
 }
@@ -223,41 +194,6 @@ func GetDefaultDisabledComponents() ([]string, error) {
 func GetClusterManagementAddonName(component string) (string, error) {
 	if val, ok := ClusterManagementAddOns[component]; !ok {
 		return val, fmt.Errorf("failed to find ClusterManagementAddOn name for: %s component", component)
-	} else {
-		return val, nil
-	}
-}
-
-/*
-GetLegacyConfigKind returns a list of legacy kind resources that are required to be removed before updating to
-ACM 2.9 and later.
-*/
-func GetLegacyConfigKind() []string {
-	return LegacyConfigKind
-}
-
-// GetLegacyPrometheusRulesName returns the name of the PrometheusRules based on the provided component name.
-func GetLegacyPrometheusRulesName(component string) (string, error) {
-	if val, ok := MCHLegacyPrometheusRules[component]; !ok {
-		return val, fmt.Errorf("failed to find PrometheusRules name for: %s component", component)
-	} else {
-		return val, nil
-	}
-}
-
-// GetLegacyServiceMonitorName returns the name of the ServiceMonitors based on the provided component name.
-func GetLegacyServiceMonitorName(component string) (string, error) {
-	if val, ok := MCHLegacyServiceMonitors[component]; !ok {
-		return val, fmt.Errorf("failed to find ServiceMonitors name for: %s component", component)
-	} else {
-		return val, nil
-	}
-}
-
-// GetLegacyServiceName returns the name of the Services based on the provided component name.
-func GetLegacyServiceName(component string) (string, error) {
-	if val, ok := MCHLegacyServices[component]; !ok {
-		return val, fmt.Errorf("failed to find Services name for: %s component", component)
 	} else {
 		return val, nil
 	}
@@ -365,19 +301,6 @@ func ValidComponent(c ComponentConfig, validComponents []string) bool {
 		}
 	}
 	return false
-}
-
-// IsCommunity checks to see if the operator is running in community mode
-func IsCommunity() (bool, error) {
-	packageName := os.Getenv("OPERATOR_PACKAGE")
-	if packageName == "advanced-cluster-management" {
-		return false, nil
-	} else if (packageName == "stolostron") || (packageName == "") {
-		return true, nil
-	} else {
-		err := errors.New("there is an illegal value set for OPERATOR_PACKAGE")
-		return true, err
-	}
 }
 
 // AvailabilityConfigIsValid returns true is the availability type is a recognized value

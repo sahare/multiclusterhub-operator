@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.1
+    controller-gen.kubebuilder.io/version: v0.17.3
   name: gitopsclusters.apps.open-cluster-management.io
 spec:
   group: apps.open-cluster-management.io
@@ -74,10 +74,6 @@ spec:
                         description: Enabled indicates whether the ArgoCD agent is
                           enabled. Default is false.
                         type: boolean
-                      image:
-                        description: Image specifies the ArgoCD agent container image.
-                          Default is empty.
-                        type: string
                       mode:
                         description: Mode specifies the ArgoCD agent mode. Default
                           is empty.
@@ -103,39 +99,31 @@ spec:
                       Enabled indicates whether the GitOps addon is enabled. Default is false.
                       When enabled, creates AddonDeploymentConfigs/ManagedClusterAddon resources.
                     type: boolean
-                  gitOpsImage:
-                    description: GitOpsImage specifies the GitOps (ArgoCD) container
-                      image. Default is empty.
-                    type: string
-                  gitOpsNamespace:
-                    description: GitOpsNamespace specifies the GitOps namespace. Default
-                      is empty.
-                    type: string
                   gitOpsOperatorImage:
-                    description: GitOpsOperatorImage specifies the GitOps operator
-                      container image. Default is empty.
-                    type: string
-                  gitOpsOperatorNamespace:
-                    description: GitOpsOperatorNamespace specifies the GitOps operator
-                      namespace. Default is empty.
+                    description: |-
+                      GitOpsOperatorImage specifies the GitOps operator container image. Default is empty.
+                      This is the only image that needs to be specified - the operator uses environment
+                      variables to determine all other component images (ArgoCD, Redis, etc.).
                     type: string
                   olmSubscription:
                     description: |-
-                      OLMSubscription defines the configuration for deploying the full OLM-managed
-                      OpenShift GitOps operator instead of the lightweight helm-based deployment.
-                      This is only supported on OpenShift ManagedClusters with OLM installed.
-                      When enabled, this takes precedence over the helm-based deployment.
+                      OLMSubscription defines optional custom OLM Subscription configuration for OCP managed clusters.
+                      The addon agent auto-detects OCP clusters and always uses OLM for operator installation.
+                      When olmSubscription.enabled is true, the specified fields (channel, source, etc.) are passed
+                      to the addon agent to override the default subscription values. Non-OCP clusters ignore this.
+                      Note: the local-cluster (hub) path skips operator installation and therefore ignores olmSubscription.
                       Requires gitopsAddon.enabled to be true.
                     properties:
                       channel:
-                        description: Channel is the OLM channel. Default is "stable".
+                        description: Channel is the OLM channel. Default is "latest".
                         type: string
                       enabled:
                         default: false
                         description: |-
-                          Enabled indicates whether to deploy via OLM Subscription. Default is false.
-                          When enabled, the full OLM-managed OpenShift GitOps operator is deployed
-                          instead of the lightweight helm-based operator.
+                          Enabled indicates whether custom OLM subscription configuration should be passed
+                          to OCP managed clusters. When true, the specified fields override the default
+                          subscription values. When false, nil, or absent, auto-detect uses hardcoded defaults.
+                          Non-OCP clusters are unaffected regardless of this setting.
                         type: boolean
                       installPlanApproval:
                         description: |-
@@ -169,14 +157,6 @@ spec:
                       When false (default), existing config values are preserved and only new ones are added.
                       When true, config values from GitOpsCluster spec will override existing values.
                     type: boolean
-                  reconcileScope:
-                    description: ReconcileScope specifies the reconcile scope for
-                      the GitOps operator. Default is empty.
-                    type: string
-                  redisImage:
-                    description: RedisImage specifies the Redis container image. Default
-                      is empty.
-                    type: string
                 type: object
               managedServiceAccountRef:
                 description: ManagedServiceAccountRef defines managed service account

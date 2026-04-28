@@ -31,7 +31,49 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+var configLog = logf.Log.WithName("config")
+
+// previewToGAComponents maps preview component names to their GA equivalents.
+// When a preview component is enabled, it is automatically replaced with the GA version.
+var previewToGAComponents = map[string]string{
+	operatorv1.MTVIntegrationsPreview: operatorv1.MTVIntegrations,
+	operatorv1.FineGrainedRbacPreview: operatorv1.FineGrainedRbac,
+	// Add future preview→GA transitions here
+}
+
+// defaultAnnotations defines annotations that should be set on all MCH instances
+// if not already present. Add new default annotations here.
+var defaultAnnotations = map[string]string{
+	utils.AnnotationResourceAdoptionPolicy: "Strict",
+	// Future default annotations can be added here
+}
+
+// setDefaultAnnotations applies default values for any missing annotations
+// Returns true if any annotations were added
+func setDefaultAnnotations(m *operatorv1.MultiClusterHub) bool {
+	updated := false
+	annotations := m.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+
+	for key, defaultValue := range defaultAnnotations {
+		if _, exists := annotations[key]; !exists {
+			annotations[key] = defaultValue
+			updated = true
+			configLog.Info("Setting default annotation", "annotation", key, "value", defaultValue)
+		}
+	}
+
+	if updated {
+		m.SetAnnotations(annotations)
+	}
+
+	return updated
+}
 
 func updatePausedCondition(m *operatorv1.MultiClusterHub) {
 	c := GetHubCondition(m.Status, operatorv1.Progressing)
@@ -75,14 +117,26 @@ func (r *MultiClusterHubReconciler) setDefaults(m *operatorv1.MultiClusterHub, o
 		updateNecessary = true
 	}
 
-	// management-ingress component removed in 2.7.0
-	if m.Prune(operatorv1.ManagementIngress) {
+	// Set default annotations if not specified
+	if setDefaultAnnotations(m) {
 		updateNecessary = true
 	}
 
-	// helm-repo component removed in 2.7.0
-	if m.Prune(operatorv1.Repo) {
-		updateNecessary = true
+	// Automatically migrate preview components to their GA equivalents
+	for preview, ga := range previewToGAComponents {
+		if m.Enabled(preview) {
+			log.Info("GA component version enabled due to preview being enabled",
+				"preview", preview,
+				"ga", ga,
+			)
+			m.Enable(ga)
+			updateNecessary = true
+		}
+
+		if m.Prune(preview) {
+			log.Info("Pruning preview component", "preview", preview)
+			updateNecessary = true
+		}
 	}
 
 	for _, c := range m.Spec.Overrides.Components {
@@ -145,35 +199,4 @@ func (r *MultiClusterHubReconciler) setDefaults(m *operatorv1.MultiClusterHub, o
 	}
 	log.Info("No updates to defaults detected")
 	return ctrl.Result{}, nil
-}
-
-func (r *MultiClusterHubReconciler) CheckDeprecatedFieldUsage(m *operatorv1.MultiClusterHub) {
-	a := m.GetAnnotations()
-	df := []struct {
-		name      string
-		isPresent bool
-	}{
-		{"hive", m.Spec.Hive != nil},
-		{"ingress", m.Spec.Ingress != nil},
-		{"customCAConfigmap", m.Spec.CustomCAConfigmap != ""},
-		{"enableClusterBackup", m.Spec.EnableClusterBackup},
-		{"enableClusterProxyAddon", m.Spec.EnableClusterProxyAddon},
-		{"separateCertificateManagement", m.Spec.SeparateCertificateManagement},
-		{utils.DeprecatedAnnotationIgnoreOCPVersion, a[utils.DeprecatedAnnotationIgnoreOCPVersion] != ""},
-		{utils.DeprecatedAnnotationImageOverridesCM, a[utils.DeprecatedAnnotationImageOverridesCM] != ""},
-		{utils.DeprecatedAnnotationImageRepo, a[utils.DeprecatedAnnotationImageRepo] != ""},
-		{utils.DeprecatedAnnotationKubeconfig, a[utils.DeprecatedAnnotationKubeconfig] != ""},
-		{utils.DeprecatedAnnotationMCHPause, a[utils.DeprecatedAnnotationMCHPause] != ""},
-	}
-
-	if r.DeprecatedFields == nil {
-		r.DeprecatedFields = make(map[string]bool)
-	}
-
-	for _, f := range df {
-		if f.isPresent && !r.DeprecatedFields[f.name] {
-			r.Log.Info(fmt.Sprintf("Warning: %s field usage is deprecated in operator.", f.name))
-			r.DeprecatedFields[f.name] = true
-		}
-	}
 }

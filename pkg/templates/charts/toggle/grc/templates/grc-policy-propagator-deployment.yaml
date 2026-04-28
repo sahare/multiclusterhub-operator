@@ -122,12 +122,27 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
         readinessProbe:
           exec:
             command:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "successThreshold") }}
+          successThreshold: {{ .Values.hubconfig.probeConfig.successThreshold }}
+{{- end }}
         volumeMounts:
         - mountPath: "/var/run/metrics-cert"
           name: metrics-cert

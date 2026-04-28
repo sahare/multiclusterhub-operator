@@ -30,6 +30,8 @@ rules:
   - manifestworks
   - manifestworks/status
   - managedclusters
+  - managedclustersetbindings
+  - managedclustersets/bind
   - managedclusterviews
   - managedclusterviews/status
   - managedclusteraddons
@@ -109,6 +111,14 @@ rules:
   - delete
   - deletecollection
 - apiGroups:
+  - ''
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - rolebindings
@@ -169,3 +179,26 @@ rules:
   - update
   - patch
   - delete
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - clusterview.open-cluster-management.io
+  resources:
+  - userpermissions
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - apiservers
+  verbs:
+  - get
+  - list
+  - watch

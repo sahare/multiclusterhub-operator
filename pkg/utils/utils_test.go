@@ -4,38 +4,28 @@
 package utils
 
 import (
+	"context"
+	"crypto/tls"
 	"os"
 	"reflect"
 	"testing"
 
+	configv1 "github.com/openshift/api/config/v1"
 	mchv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
 	resources "github.com/stolostron/multiclusterhub-operator/test/unit-tests"
 
-	mcev1 "github.com/stolostron/backplane-operator/api/v1"
-
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("utility functions", func() {
-	Context("CertManagerNS function", func() {
-		It("returns the cert manager namespace when provided in the spec", func() {
-			mch := resources.EmptyMCH()
-			mch.Spec.SeparateCertificateManagement = true
-			Expect(CertManagerNS(&mch)).To(Equal(CertManagerNamespace))
-		})
-
-		It("returns the mch namespace when certmanager ns is not provided", func() {
-			mch := resources.EmptyMCH()
-			Expect(CertManagerNS(&mch)).To(Equal(resources.MulticlusterhubNamespace))
-		})
-	})
-
 	Context("using label function", func() {
 		It("adds the installer labels to the object", func() {
 			By("creating an unstructured object with a label")
@@ -58,87 +48,6 @@ var _ = Describe("utility functions", func() {
 			s, ok = l["mylabel"]
 			Expect(ok).To(BeTrue())
 			Expect(s).To(Equal("myvalue"))
-		})
-
-		It("adds labels to a deployment", func() {
-			By("creating a deployment with no labels")
-			d := &appsv1.Deployment{}
-
-			By("adding a label to the deployment")
-			l := map[string]string{"mylabel-1": "myvalue-1"}
-			Expect(AddDeploymentLabels(d, l)).To(BeTrue())
-			s, ok := d.Labels["mylabel-1"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-1"))
-
-			By("adding the same label to the deployment")
-			Expect(AddDeploymentLabels(d, l)).To(BeFalse())
-			s, ok = d.Labels["mylabel-1"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-1"))
-
-			By("adding a second label to the deployment")
-			l = map[string]string{"mylabel-2": "myvalue-2"}
-			Expect(AddDeploymentLabels(d, l)).To(BeTrue())
-			s, ok = d.Labels["mylabel-2"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-2"))
-
-			By("updating the second label on the deployment")
-			l = map[string]string{"mylabel-2": "myvalue-2a"}
-			Expect(AddDeploymentLabels(d, l)).To(BeTrue())
-			s, ok = d.Labels["mylabel-2"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-2a"))
-		})
-
-		It("adds labels to the pods in a deployment", func() {
-			By("creating a deployment with no pod labels")
-			d := &appsv1.Deployment{}
-
-			By("adding a label to the deployment pods")
-			l := map[string]string{"mylabel-1": "myvalue-1"}
-			Expect(AddPodLabels(d, l)).To(BeTrue())
-			s, ok := d.Spec.Template.Labels["mylabel-1"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-1"))
-
-			By("adding the same label to the deployment pods")
-			Expect(AddPodLabels(d, l)).To(BeFalse())
-			s, ok = d.Spec.Template.Labels["mylabel-1"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-1"))
-
-			By("adding a second label to the deployment pods")
-			l = map[string]string{"mylabel-2": "myvalue-2"}
-			Expect(AddPodLabels(d, l)).To(BeTrue())
-			s, ok = d.Spec.Template.Labels["mylabel-2"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-2"))
-
-			By("updating the second label on the deployment pods")
-			l = map[string]string{"mylabel-2": "myvalue-2a"}
-			Expect(AddPodLabels(d, l)).To(BeTrue())
-			s, ok = d.Spec.Template.Labels["mylabel-2"]
-			Expect(ok).To(BeTrue())
-			Expect(s).To(Equal("myvalue-2a"))
-		})
-	})
-
-	Context("CoreToUnstructured function", func() {
-		It("converts a valid object to unstructured", func() {
-			By("creating a valid object")
-			d := &appsv1.Deployment{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "Deployment",
-					APIVersion: "apps/v1",
-				},
-			}
-
-			By("converting the object to unstructured")
-			u, err := CoreToUnstructured(d)
-			Expect(err).To(BeNil())
-			Expect(u).ToNot(BeNil())
 		})
 	})
 
@@ -170,11 +79,6 @@ var _ = Describe("utility functions", func() {
 			mch := resources.EmptyMCH()
 			d := GetDeployments(&mch)
 			Expect(len(d)).To(Equal(0))
-		})
-		It("gets custom resources", func() {
-			mch := resources.EmptyMCH()
-			cr := GetCustomResources(&mch)
-			Expect(len(cr)).To(Equal(3))
 		})
 		It("gets deployments for status with mcho-repo disabled", func() {
 			mch := resources.EmptyMCH()
@@ -213,7 +117,9 @@ var _ = Describe("utility functions", func() {
 			mch := resources.EmptyMCH()
 			mch.Enable(mchv1.Console)
 			d := GetDeploymentsForStatus(&mch, true, false)
-			Expect(len(d)).To(Equal(1))
+			Expect(len(d)).To(Equal(2))
+			Expect(containsDeployment(d, "console-chart-console-v2", resources.MulticlusterhubNamespace)).To(BeTrue())
+			Expect(containsDeployment(d, "acm-cli-downloads", resources.MulticlusterhubNamespace)).To(BeTrue())
 		})
 		It("gets deployments for status with observability enabled", func() {
 			mch := resources.EmptyMCH()
@@ -227,11 +133,19 @@ var _ = Describe("utility functions", func() {
 			d := GetDeploymentsForStatus(&mch, true, false)
 			Expect(len(d)).To(Equal(1))
 		})
-		It("gets deployments for status with cluster-permission enabled", func() {
+		It("gets deployments for status with fine-grained-rbac enabled", func() {
 			mch := resources.EmptyMCH()
-			mch.Enable(mchv1.ClusterPermission)
+			mch.Enable(mchv1.FineGrainedRbac)
 			d := GetDeploymentsForStatus(&mch, true, false)
 			Expect(len(d)).To(Equal(1))
+			Expect(containsDeployment(d, "multicluster-role-assignment-controller", resources.MulticlusterhubNamespace)).To(BeTrue())
+		})
+		It("gets deployments for status with MTV integrations enabled", func() {
+			mch := resources.EmptyMCH()
+			mch.Enable(mchv1.MTVIntegrations)
+			d := GetDeploymentsForStatus(&mch, true, false)
+			Expect(len(d)).To(Equal(1))
+			Expect(containsDeployment(d, "mtv-integrations-controller", resources.MulticlusterhubNamespace)).To(BeTrue())
 		})
 		It("Sets Default Component values", func() {
 			mch := resources.EmptyMCH()
@@ -280,125 +194,12 @@ var _ = Describe("utility functions", func() {
 	})
 })
 
-func TestContainsPullSecret(t *testing.T) {
-	superset := []corev1.LocalObjectReference{{Name: "foo"}, {Name: "bar"}}
-	type args struct {
-		pullSecrets []corev1.LocalObjectReference
-		ps          corev1.LocalObjectReference
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
-	}{
-		{
-			"Contains pull secret",
-			args{
-				pullSecrets: superset,
-				ps:          corev1.LocalObjectReference{Name: "foo"},
-			},
-			true,
-		},
-		{
-			"Does not contain pull secret",
-			args{
-				pullSecrets: superset,
-				ps:          corev1.LocalObjectReference{Name: "baz"},
-			},
-			false,
-		},
-		{
-			"Empty list",
-			args{
-				pullSecrets: []corev1.LocalObjectReference{},
-				ps:          corev1.LocalObjectReference{Name: "baz"},
-			},
-			false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ContainsPullSecret(tt.args.pullSecrets, tt.args.ps); got != tt.want {
-				t.Errorf("ContainsPullSecret() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestContainsMap(t *testing.T) {
-	superset := map[string]string{
-		"hello":     "world",
-		"goodnight": "moon",
-		"yip":       "yip",
-	}
-	type args struct {
-		all      map[string]string
-		expected map[string]string
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
-	}{
-		{
-			"Superset",
-			args{
-				all:      superset,
-				expected: map[string]string{"hello": "world", "yip": "yip"},
-			},
-			true,
-		},
-		{
-			"Partial overlap",
-			args{
-				all:      superset,
-				expected: map[string]string{"hello": "world", "greetings": "traveler"},
-			},
-			false,
-		},
-		{
-			"Empty superset",
-			args{
-				all:      map[string]string{},
-				expected: map[string]string{"yip": "yip"},
-			},
-			false,
-		},
-		{
-			"Empty subset",
-			args{
-				all:      superset,
-				expected: map[string]string{},
-			},
-			true,
-		},
-		{
-			"Same keys, different values",
-			args{
-				all:      superset,
-				expected: map[string]string{"hello": "moon", "yip": "yip"},
-			},
-			false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ContainsMap(tt.args.all, tt.args.expected); got != tt.want {
-				t.Errorf("ContainsMap() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestMchIsValid(t *testing.T) {
 	validMCH := &mchv1.MultiClusterHub{
 		TypeMeta:   metav1.TypeMeta{Kind: "MultiClusterHub"},
 		ObjectMeta: metav1.ObjectMeta{Namespace: "test"},
 		Spec: mchv1.MultiClusterHubSpec{
-			ImagePullSecret: "test",
-			Ingress: &mchv1.IngressSpec{
-				SSLCiphers: []string{"foo", "bar", "baz"},
-			},
+			ImagePullSecret:    "test",
 			AvailabilityConfig: mchv1.HAHigh,
 		},
 	}
@@ -412,13 +213,31 @@ func TestMchIsValid(t *testing.T) {
 		want bool
 	}{
 		{
-			"Valid MCH",
+			"Valid MCH with HAHigh",
 			args{validMCH},
 			true,
 		},
 		{
-			"Empty object",
+			"Valid MCH with HABasic",
+			args{&mchv1.MultiClusterHub{
+				Spec: mchv1.MultiClusterHubSpec{
+					AvailabilityConfig: mchv1.HABasic,
+				},
+			}},
+			true,
+		},
+		{
+			"Invalid MCH with empty AvailabilityConfig",
 			args{&mchv1.MultiClusterHub{}},
+			false,
+		},
+		{
+			"Invalid MCH with invalid AvailabilityConfig",
+			args{&mchv1.MultiClusterHub{
+				Spec: mchv1.MultiClusterHubSpec{
+					AvailabilityConfig: mchv1.AvailabilityType("invalid"),
+				},
+			}},
 			false,
 		},
 	}
@@ -429,14 +248,6 @@ func TestMchIsValid(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDistributePods(t *testing.T) {
-	t.Run("Returns pod affinity", func(t *testing.T) {
-		if got := DistributePods("app", "testapp"); reflect.TypeOf(got) != reflect.TypeOf((*corev1.Affinity)(nil)) {
-			t.Errorf("DistributePods() did not return an affinity type")
-		}
-	})
 }
 
 func TestGetImagePullPolicy(t *testing.T) {
@@ -491,31 +302,6 @@ func TestDefaultReplicaCount(t *testing.T) {
 	})
 }
 
-func TestFormatSSLCiphers(t *testing.T) {
-	type args struct {
-		ciphers []string
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			"Default cipher list",
-			args{[]string{"ECDHE-ECDSA-AES256-GCM-SHA384", "ECDHE-RSA-AES256-GCM-SHA384"}},
-			"ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384",
-		},
-		{"Empty slice", args{[]string{}}, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := FormatSSLCiphers(tt.args.ciphers); got != tt.want {
-				t.Errorf("FormatSSLCiphers() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestTrackedNamespaces(t *testing.T) {
 	tests := []struct {
 		name string
@@ -526,16 +312,6 @@ func TestTrackedNamespaces(t *testing.T) {
 			name: "Watching only in same namespace",
 			mch:  &mchv1.MultiClusterHub{ObjectMeta: metav1.ObjectMeta{Namespace: "test"}},
 			want: []string{"test"},
-		},
-		{
-			name: "Watching current and cert-manager namespace",
-			mch: &mchv1.MultiClusterHub{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "test"},
-				Spec: mchv1.MultiClusterHubSpec{
-					SeparateCertificateManagement: true,
-				},
-			},
-			want: []string{"test", CertManagerNamespace},
 		},
 	}
 	for _, tt := range tests {
@@ -586,30 +362,6 @@ func Test_deduplicate(t *testing.T) {
 	}
 }
 
-func TestAddInstallerLabels(t *testing.T) {
-	labels := map[string]string{
-		"testlabel": "testvalue",
-	}
-	name := "testname"
-	ns := "testnamespace"
-
-	labels = AddInstallerLabels(labels, name, ns)
-
-	tests := map[string]string{
-		"testlabel":           "testvalue",
-		"installer.name":      name,
-		"installer.namespace": ns,
-	}
-
-	for key, value := range tests {
-		if v, ok := labels[key]; !ok {
-			t.Errorf("AddInstallerLabels() missing label %q", key)
-		} else if v != value {
-			t.Errorf("AddInstallerLabels() label %q not %q, found %q", key, value, v)
-		}
-	}
-}
-
 func TestGetMCEComponents(t *testing.T) {
 	mch := &mchv1.MultiClusterHub{}
 	mch.Spec.DisableHubSelfManagement = false
@@ -647,52 +399,14 @@ func TestGetMCEComponents(t *testing.T) {
 	}
 }
 
-func TestUpdateMCEOverrides(t *testing.T) {
-	mch := &mchv1.MultiClusterHub{}
-	mch.Spec.DisableHubSelfManagement = false
-	mce := &mcev1.MultiClusterEngine{}
-
-	UpdateMCEOverrides(mce, mch)
-
-	found := false
-	for _, c := range mce.Spec.Overrides.Components {
-		if c.Name != mchv1.MCELocalCluster {
-			continue
-		}
-		found = true
-		if !c.Enabled {
-			t.Errorf("UpdateMCEOverrides() with DisableHubSelfManagement=false, expected 'local-cluster' to be enabled")
-		}
-	}
-	if !found {
-		t.Errorf("UpdateMCEOverrides() with DisableHubSelfManagement=false, expected 'local-cluster' to be present")
-	}
-
-	mch = &mchv1.MultiClusterHub{}
-	mch.Spec.DisableHubSelfManagement = true
-	mce = &mcev1.MultiClusterEngine{}
-
-	if mce.Spec.Overrides == nil {
-		// Overrides.Components is empty, so local-cluster is disabled
-		return
-	}
-	for _, c := range mce.Spec.Overrides.Components {
-		if c.Name != mchv1.MCELocalCluster {
-			continue
-		}
-		if c.Enabled {
-			t.Errorf("UpdateMCEOverrides() with DisableHubSelfManagement=true, expected 'local-cluster' to be disabled")
-		}
-	}
-	// Ok if local-cluster not found
-}
-
 func Test_GetDeploymentsForStatus(t *testing.T) {
 	tests := []struct {
-		name       string
-		mch        mchv1.MultiClusterHub
-		stsEnabled bool
-		want       int
+		name           string
+		mch            mchv1.MultiClusterHub
+		stsEnabled     bool
+		want           int
+		mustContain    []types.NamespacedName
+		mustNotContain []types.NamespacedName
 	}{
 		{
 			name:       "should get deployment status for MCH components",
@@ -716,6 +430,9 @@ func Test_GetDeploymentsForStatus(t *testing.T) {
 			},
 			stsEnabled: true,
 			want:       20,
+			mustNotContain: []types.NamespacedName{
+				{Name: "openshift-adp-controller-manager", Namespace: ClusterSubscriptionNamespace},
+			},
 		},
 		{
 			name: "should get deployment status for MCH components with STS disabled",
@@ -733,6 +450,9 @@ func Test_GetDeploymentsForStatus(t *testing.T) {
 			},
 			stsEnabled: false,
 			want:       21,
+			mustContain: []types.NamespacedName{
+				{Name: "openshift-adp-controller-manager", Namespace: ClusterSubscriptionNamespace},
+			},
 		},
 	}
 
@@ -742,8 +462,255 @@ func Test_GetDeploymentsForStatus(t *testing.T) {
 				t.Errorf("failed to set default components: %v", err)
 			}
 
-			if deployments := GetDeploymentsForStatus(&tt.mch, true, tt.stsEnabled); len(deployments) != tt.want {
-				t.Errorf("expected %v, got %v", len(deployments), tt.want)
+			deployments := GetDeploymentsForStatus(&tt.mch, true, tt.stsEnabled)
+
+			// Check total count
+			if len(deployments) != tt.want {
+				t.Errorf("expected %v deployments, got %v", tt.want, len(deployments))
+			}
+
+			// Verify deployments that must be present
+			for _, d := range tt.mustContain {
+				if !containsDeployment(deployments, d.Name, d.Namespace) {
+					t.Errorf("missing deployment: %s/%s", d.Namespace, d.Name)
+				}
+			}
+
+			// Verify deployments that must not be present
+			for _, d := range tt.mustNotContain {
+				if containsDeployment(deployments, d.Name, d.Namespace) {
+					t.Errorf("unexpected deployment: %s/%s", d.Namespace, d.Name)
+				}
+			}
+		})
+	}
+}
+
+// containsDeployment checks if a deployment with the given name and namespace exists in the list
+func containsDeployment(deployments []types.NamespacedName, name, namespace string) bool {
+	for _, d := range deployments {
+		if d.Name == name && d.Namespace == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+func TestConvertCipherSuites(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []string
+		want   []uint16
+		wantOk bool
+	}{
+		{
+			name:   "TLS 1.2 ECDHE-RSA ciphers",
+			input:  []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
+			want:   []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384},
+			wantOk: true,
+		},
+		{
+			name:   "TLS 1.2 ECDHE-ECDSA ciphers",
+			input:  []string{"ECDHE-ECDSA-AES128-GCM-SHA256", "ECDHE-ECDSA-CHACHA20-POLY1305"},
+			want:   []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256},
+			wantOk: true,
+		},
+		{
+			name:   "TLS 1.3 ciphers are filtered out",
+			input:  []string{"TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "ECDHE-RSA-AES128-GCM-SHA256"},
+			want:   []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+			wantOk: true,
+		},
+		{
+			name:   "All TLS 1.3 ciphers filtered",
+			input:  []string{"TLS_AES_128_GCM_SHA256", "TLS_CHACHA20_POLY1305_SHA256"},
+			want:   []uint16{},
+			wantOk: true,
+		},
+		{
+			name:   "Unknown cipher silently ignored",
+			input:  []string{"UNKNOWN-CIPHER", "ECDHE-RSA-AES128-GCM-SHA256"},
+			want:   []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+			wantOk: true,
+		},
+		{
+			name:   "Empty input",
+			input:  []string{},
+			want:   []uint16{},
+			wantOk: true,
+		},
+		{
+			name:   "CBC ciphers",
+			input:  []string{"ECDHE-RSA-AES128-SHA256", "AES128-SHA"},
+			want:   []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256, tls.TLS_RSA_WITH_AES_128_CBC_SHA},
+			wantOk: true,
+		},
+		{
+			name:   "DHE ciphers not supported (silently ignored)",
+			input:  []string{"DHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES128-GCM-SHA256"},
+			want:   []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+			wantOk: true,
+		},
+		{
+			name:   "3DES cipher",
+			input:  []string{"DES-CBC3-SHA"},
+			want:   []uint16{tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA},
+			wantOk: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ConvertCipherSuites(tt.input)
+
+			if len(got) != len(tt.want) {
+				t.Errorf("ConvertCipherSuites() returned %d ciphers, want %d", len(got), len(tt.want))
+				return
+			}
+
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("ConvertCipherSuites()[%d] = %v, want %v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestGetAPIServerTLSProfile(t *testing.T) {
+	// Create scheme with necessary types
+	scheme := runtime.NewScheme()
+	_ = configv1.AddToScheme(scheme)
+
+	tests := []struct {
+		name        string
+		apiServer   *configv1.APIServer
+		unitTest    bool
+		expectError bool
+		wantProfile *configv1.TLSProfileSpec
+	}{
+		{
+			name:        "unit test mode returns intermediate",
+			unitTest:    true,
+			expectError: false,
+			wantProfile: configv1.TLSProfiles[configv1.TLSProfileIntermediateType],
+		},
+		{
+			name: "nil TLS profile returns intermediate",
+			apiServer: &configv1.APIServer{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+				Spec:       configv1.APIServerSpec{},
+			},
+			expectError: false,
+			wantProfile: configv1.TLSProfiles[configv1.TLSProfileIntermediateType],
+		},
+		{
+			name: "old profile type",
+			apiServer: &configv1.APIServer{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+				Spec: configv1.APIServerSpec{
+					TLSSecurityProfile: &configv1.TLSSecurityProfile{
+						Type: configv1.TLSProfileOldType,
+					},
+				},
+			},
+			expectError: false,
+			wantProfile: configv1.TLSProfiles[configv1.TLSProfileOldType],
+		},
+		{
+			name: "intermediate profile type",
+			apiServer: &configv1.APIServer{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+				Spec: configv1.APIServerSpec{
+					TLSSecurityProfile: &configv1.TLSSecurityProfile{
+						Type: configv1.TLSProfileIntermediateType,
+					},
+				},
+			},
+			expectError: false,
+			wantProfile: configv1.TLSProfiles[configv1.TLSProfileIntermediateType],
+		},
+		{
+			name: "modern profile type",
+			apiServer: &configv1.APIServer{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+				Spec: configv1.APIServerSpec{
+					TLSSecurityProfile: &configv1.TLSSecurityProfile{
+						Type: configv1.TLSProfileModernType,
+					},
+				},
+			},
+			expectError: false,
+			wantProfile: configv1.TLSProfiles[configv1.TLSProfileModernType],
+		},
+		{
+			name: "custom profile type",
+			apiServer: &configv1.APIServer{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+				Spec: configv1.APIServerSpec{
+					TLSSecurityProfile: &configv1.TLSSecurityProfile{
+						Type: configv1.TLSProfileCustomType,
+						Custom: &configv1.CustomTLSProfile{
+							TLSProfileSpec: configv1.TLSProfileSpec{
+								Ciphers:       []string{"TLS_AES_128_GCM_SHA256"},
+								MinTLSVersion: configv1.VersionTLS13,
+							},
+						},
+					},
+				},
+			},
+			expectError: false,
+			wantProfile: &configv1.TLSProfileSpec{
+				Ciphers:       []string{"TLS_AES_128_GCM_SHA256"},
+				MinTLSVersion: configv1.VersionTLS13,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set up environment for unit test mode
+			if tt.unitTest {
+				os.Setenv(UnitTestEnvVar, "true")
+				defer os.Unsetenv(UnitTestEnvVar)
+			} else {
+				os.Unsetenv(UnitTestEnvVar)
+			}
+
+			// Create fake client
+			var objs []runtime.Object
+			if tt.apiServer != nil {
+				objs = append(objs, tt.apiServer)
+			}
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
+
+			// Call function
+			got, err := GetAPIServerTLSProfile(context.Background(), cl)
+
+			// Check error expectation
+			if tt.expectError && err == nil {
+				t.Errorf("GetAPIServerTLSProfile() expected error but got none")
+				return
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("GetAPIServerTLSProfile() unexpected error: %v", err)
+				return
+			}
+
+			// Compare profiles
+			if !tt.expectError {
+				if got == nil {
+					t.Errorf("GetAPIServerTLSProfile() returned nil profile")
+					return
+				}
+				if got.MinTLSVersion != tt.wantProfile.MinTLSVersion {
+					t.Errorf("GetAPIServerTLSProfile() MinTLSVersion = %v, want %v",
+						got.MinTLSVersion, tt.wantProfile.MinTLSVersion)
+				}
+				if !reflect.DeepEqual(got.Ciphers, tt.wantProfile.Ciphers) {
+					t.Errorf("GetAPIServerTLSProfile() Ciphers = %v, want %v",
+						got.Ciphers, tt.wantProfile.Ciphers)
+				}
 			}
 		})
 	}

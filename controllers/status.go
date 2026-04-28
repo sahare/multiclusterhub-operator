@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -184,6 +185,13 @@ func (r *MultiClusterHubReconciler) calculateStatus(ctx context.Context, hub *op
 		if !hubPruning(status) && !utils.IsPaused(hub) {
 			available := NewHubCondition(operatorsv1.Complete, metav1.ConditionTrue, ComponentsAvailableReason, "All hub components ready.")
 			SetHubCondition(&status, *available)
+			RemoveHubCondition(&status, operatorsv1.Progressing)
+		} else if hubPruning(status) && !utils.IsPaused(hub) {
+			// All components successful but pruning condition exists - pruning must be complete
+			// Set AllOldComponentsRemovedReason so hubPruning() returns false on next reconcile
+			complete := NewHubCondition(operatorsv1.Progressing, metav1.ConditionTrue, AllOldComponentsRemovedReason, "All old resources pruned")
+			SetHubCondition(&status, *complete)
+			log.Info("Component pruning complete - all resources successfully removed")
 		} else {
 			// only add unavailable status if complete status already present
 			if HubConditionPresent(status, operatorsv1.Complete) {
@@ -588,7 +596,14 @@ func SetHubCondition(status *operatorsv1.MultiClusterHubStatus, condition operat
 		condition.LastTransitionTime = currentCond.LastTransitionTime
 	}
 	newConditions := filterOutCondition(status.HubConditions, condition.Type)
-	status.HubConditions = append(newConditions, condition)
+	newConditions = append(newConditions, condition)
+
+	// Sort conditions by lastTransitionTime so the most recently transitioned is always last
+	sort.Slice(newConditions, func(i, j int) bool {
+		return newConditions[i].LastTransitionTime.Before(&newConditions[j].LastTransitionTime)
+	})
+
+	status.HubConditions = newConditions
 }
 
 // RemoveCRDCondition removes the status condition.

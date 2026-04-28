@@ -53,7 +53,7 @@ type MultiClusterHubSpec struct {
 	// (Deprecated) Install cert-manager into its own namespace
 	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Separate Certificate Management",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	// +optional
-	SeparateCertificateManagement bool `json:"separateCertificateManagement"`
+	SeparateCertificateManagement bool `json:"separateCertificateManagement,omitempty"`
 
 	// Set the nodeselectors
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
@@ -108,6 +108,8 @@ type Overrides struct {
 	// Provides optional configuration for components, the list of which can be found here: https://github.com/stolostron/multiclusterhub-operator/tree/main/docs/available-components.md
 	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Component Configuration",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:hidden"}
 	// +optional
+	// +listType=map
+	// +listMapKey=name
 	Components []ComponentConfig `json:"components,omitempty"`
 }
 
@@ -403,6 +405,7 @@ type HubCondition struct {
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="CurrentVersion",type="string",JSONPath=".status.currentVersion",description="The current version of the MultiClusterHub"
 // +kubebuilder:printcolumn:name="DesiredVersion",type="string",JSONPath=".status.desiredVersion",description="The desired version of the MultiClusterHub"
+// +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.conditions[-1:].message",description="Message from the most recent condition"
 // +operator-sdk:csv:customresourcedefinitions:displayName="MultiClusterHub"
 type MultiClusterHub struct {
 	metav1.TypeMeta   `json:",inline"`

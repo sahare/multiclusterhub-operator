@@ -66,8 +66,7 @@ spec:
           value: multicluster-operators-standalone-subscription
         - name: OPERATOR_NAME
           value: multicluster-operators-standalone-subscription
-        image: '{{ .Values.global.imageOverrides.multicluster_operators_subscription
-          }}'
+        image: '{{ .Values.global.imageOverrides.multicluster_operators_subscription }}'
         imagePullPolicy: '{{ .Values.global.pullPolicy }}'
         livenessProbe:
           exec:
@@ -75,6 +74,12 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
         name: multicluster-operators-standalone-subscription
         readinessProbe:
           exec:
@@ -82,6 +87,15 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "successThreshold") }}
+          successThreshold: {{ .Values.hubconfig.probeConfig.successThreshold }}
+{{- end }}
         resources:
           requests:
             cpu: 150m

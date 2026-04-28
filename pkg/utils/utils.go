@@ -4,19 +4,18 @@
 package utils
 
 import (
-	"encoding/json"
+	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
-	"strings"
 
+	configv1 "github.com/openshift/api/config/v1"
 	mcev1 "github.com/stolostron/backplane-operator/api/v1"
 	operatorsv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -92,9 +91,6 @@ const (
 	// VolsyncChartLocation is the location of the Volsync Controller chart.
 	VolsyncChartLocation = "/charts/toggle/volsync-controller"
 
-	// EdgeManagerChartLocation is the location of the Edge Manager Controller chart.
-	EdgeManagerChartLocation = "/charts/toggle/flight-control"
-
 	// FineGrainedRbacChartLocation is the location of the Fine Grained RBAC chart.
 	FineGrainedRbacChartLocation = "/charts/toggle/fine-grained-rbac"
 )
@@ -113,44 +109,6 @@ const (
 	MCHOperatorMetricsServiceMonitorName = "multiclusterhub-operator-metrics"
 )
 
-// DefaultSSLCiphers defines the default cipher configuration used by management ingress
-var DefaultSSLCiphers = []string{
-	"ECDHE-ECDSA-AES256-GCM-SHA384",
-	"ECDHE-RSA-AES256-GCM-SHA384",
-	"ECDHE-ECDSA-AES128-GCM-SHA256",
-	"ECDHE-RSA-AES128-GCM-SHA256",
-}
-
-// CertManagerNS returns the namespace to deploy cert manager objects
-func CertManagerNS(m *operatorsv1.MultiClusterHub) string {
-	if m.Spec.SeparateCertificateManagement {
-		return CertManagerNamespace
-	}
-	return m.Namespace
-}
-
-// ContainsPullSecret returns whether a list of pullSecrets contains a given pull secret
-func ContainsPullSecret(pullSecrets []corev1.LocalObjectReference, ps corev1.LocalObjectReference) bool {
-	for _, v := range pullSecrets {
-		if v == ps {
-			return true
-		}
-	}
-	return false
-}
-
-// ContainsMap returns whether the expected map entries are included in the map
-func ContainsMap(all map[string]string, expected map[string]string) bool {
-	for key, exval := range expected {
-		allval, ok := all[key]
-		if !ok || allval != exval {
-			return false
-		}
-
-	}
-	return true
-}
-
 // AddInstallerLabel adds Installer Labels ...
 func AddInstallerLabel(u *unstructured.Unstructured, name string, ns string) {
 	labels := make(map[string]string)
@@ -163,69 +121,9 @@ func AddInstallerLabel(u *unstructured.Unstructured, name string, ns string) {
 	u.SetLabels(labels)
 }
 
-// AddInstallerLabel adds Installer Labels ...
-func AddInstallerLabels(l map[string]string, name string, ns string) map[string]string {
-	labels := make(map[string]string)
-	for key, value := range l {
-		labels[key] = value
-	}
-	labels["installer.name"] = name
-	labels["installer.namespace"] = ns
-
-	return labels
-}
-
-// AddDeploymentLabels ...
-func AddDeploymentLabels(d *appsv1.Deployment, labels map[string]string) bool {
-	updated := false
-	if d.Labels == nil {
-		d.Labels = labels
-		return true
-	}
-
-	for k, v := range labels {
-		if d.Labels[k] != v {
-			d.Labels[k] = v
-			updated = true
-		}
-	}
-
-	return updated
-}
-
-// AddPodLabels ...
-func AddPodLabels(d *appsv1.Deployment, labels map[string]string) bool {
-	updated := false
-	if d.Spec.Template.Labels == nil {
-		d.Spec.Template.Labels = labels
-		return true
-	}
-
-	for k, v := range labels {
-		if d.Spec.Template.Labels[k] != v {
-			d.Spec.Template.Labels[k] = v
-			updated = true
-		}
-	}
-
-	return updated
-}
-
-// CoreToUnstructured converts a Core Kube resource to unstructured
-func CoreToUnstructured(obj runtime.Object) (*unstructured.Unstructured, error) {
-	content, err := json.Marshal(obj)
-	if err != nil {
-		return nil, err
-	}
-	u := &unstructured.Unstructured{}
-	err = u.UnmarshalJSON(content)
-	return u, err
-}
-
 // MchIsValid Checks if the optional default parameters need to be set
 func MchIsValid(m *operatorsv1.MultiClusterHub) bool {
-	invalid := (m.Spec.Ingress == nil || len(m.Spec.Ingress.SSLCiphers) == 0) || !operatorsv1.AvailabilityConfigIsValid(m.Spec.AvailabilityConfig)
-	return !invalid
+	return operatorsv1.AvailabilityConfigIsValid(m.Spec.AvailabilityConfig)
 }
 
 // DefaultReplicaCount returns an integer corresponding to the default number of replicas
@@ -237,78 +135,12 @@ func DefaultReplicaCount(mch *operatorsv1.MultiClusterHub) int {
 	return 2
 }
 
-// DistributePods returns a anti-affinity rule that specifies a preference for pod replicas with
-// the matching key-value label to run across different nodes and zones
-func DistributePods(key string, value string) *corev1.Affinity {
-	return &corev1.Affinity{
-		PodAntiAffinity: &corev1.PodAntiAffinity{
-			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
-				{
-					PodAffinityTerm: corev1.PodAffinityTerm{
-						TopologyKey: "kubernetes.io/hostname",
-						LabelSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{
-								{
-									Key:      key,
-									Operator: metav1.LabelSelectorOpIn,
-									Values:   []string{value},
-								},
-							},
-						},
-					},
-					Weight: 35,
-				},
-				{
-					PodAffinityTerm: corev1.PodAffinityTerm{
-						TopologyKey: "failure-domain.beta.kubernetes.io/zone",
-						LabelSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{
-								{
-									Key:      key,
-									Operator: metav1.LabelSelectorOpIn,
-									Values:   []string{value},
-								},
-							},
-						},
-					},
-					Weight: 70,
-				},
-			},
-		},
-	}
-}
-
 // GetImagePullPolicy returns either pull policy from CR overrides or default of Always
 func GetImagePullPolicy(m *operatorsv1.MultiClusterHub) corev1.PullPolicy {
 	if m.Spec.Overrides == nil || m.Spec.Overrides.ImagePullPolicy == "" {
 		return corev1.PullIfNotPresent
 	}
 	return m.Spec.Overrides.ImagePullPolicy
-}
-
-// GetContainerArgs return arguments forfirst container in deployment
-func GetContainerArgs(dep *appsv1.Deployment) []string {
-	return dep.Spec.Template.Spec.Containers[0].Args
-}
-
-// GetContainerEnvVars returns environment variables for first container in deployment
-func GetContainerEnvVars(dep *appsv1.Deployment) []corev1.EnvVar {
-	return dep.Spec.Template.Spec.Containers[0].Env
-}
-
-// GetContainerVolumeMounts returns volume mount for first container in deployment
-func GetContainerVolumeMounts(dep *appsv1.Deployment) []corev1.VolumeMount {
-	return dep.Spec.Template.Spec.Containers[0].VolumeMounts
-}
-
-// GetDeploymentVolumes returns volumes in deployment
-func GetContainerVolumes(dep *appsv1.Deployment) []corev1.Volume {
-	return dep.Spec.Template.Spec.Volumes
-}
-
-// GetContainerRequestResources returns Request Requirements for first container in deployment
-func GetContainerRequestResources(dep *appsv1.Deployment) corev1.ResourceList {
-	return dep.Spec.Template.Spec.Containers[0].Resources.Requests
 }
 
 func IsUnitTest() bool {
@@ -342,25 +174,13 @@ func GetTestImages() []string {
 		"cluster_backup_controller", "console", "volsync_addon_controller", "multicluster_operators_application",
 		"multicloud_integrations", "mtv_integrations", "multicluster_operators_channel", "multicluster_operators_subscription",
 		"multicluster_observability_operator", "cluster_permission", "siteconfig_operator", "submariner_addon", "acm_cli",
-		"flightctl_worker", "flightctl_periodic", "flightctl_api", "flightctl_ui", "flightctl_ocp_ui",
-		"flightctl_cli_artifacts", "postgresql_12_c8s", "postgresql_12", "postgresql_16", "origin_cli", "redis_7_c9s",
-		"alertmanager", "flightctl_alertmanager_proxy", "flightctl_alert_exporter", "prometheus_alertmanager",
-		"flightctl_db_setup", "flightctl_userinfo_proxy", "multicluster_role_assignment",
+		"multicluster_role_assignment", "postgresql_16",
 	}
-}
-
-// FormatSSLCiphers converts an array of ciphers into a string consumed by the management
-// ingress chart
-func FormatSSLCiphers(ciphers []string) string {
-	return strings.Join(ciphers, ":")
 }
 
 // TrackedNamespaces returns the list of namespaces we deploy components to and should track
 func TrackedNamespaces(m *operatorsv1.MultiClusterHub) []string {
 	trackedNamespaces := []string{m.Namespace}
-	if m.Spec.SeparateCertificateManagement {
-		trackedNamespaces = append(trackedNamespaces, CertManagerNamespace)
-	}
 	if m.Enabled(operatorsv1.ClusterBackup) {
 		trackedNamespaces = append(trackedNamespaces, ClusterSubscriptionNamespace)
 	}
@@ -413,14 +233,6 @@ func GetDeployments(m *operatorsv1.MultiClusterHub) []types.NamespacedName {
 	return nn
 }
 
-func GetCustomResources(m *operatorsv1.MultiClusterHub) []types.NamespacedName {
-	return []types.NamespacedName{
-		{Name: "multicluster-engine-sub", Namespace: MCESubscriptionNamespace},
-		{Name: "multicluster-engine-csv", Namespace: MCESubscriptionNamespace},
-		{Name: "multicluster-engine"},
-	}
-}
-
 func GetDeploymentsForStatus(m *operatorsv1.MultiClusterHub, ocpConsole, isSTSEnabled bool) []types.NamespacedName {
 	nn := []types.NamespacedName{}
 	if m.Enabled(operatorsv1.Insights) {
@@ -460,6 +272,7 @@ func GetDeploymentsForStatus(m *operatorsv1.MultiClusterHub, ocpConsole, isSTSEn
 	}
 	if m.Enabled(operatorsv1.Console) && ocpConsole {
 		nn = append(nn, types.NamespacedName{Name: "console-chart-console-v2", Namespace: m.Namespace})
+		nn = append(nn, types.NamespacedName{Name: "acm-cli-downloads", Namespace: m.Namespace})
 	}
 	if m.Enabled(operatorsv1.Volsync) {
 		nn = append(nn, types.NamespacedName{Name: "volsync-addon-controller", Namespace: m.Namespace})
@@ -467,16 +280,13 @@ func GetDeploymentsForStatus(m *operatorsv1.MultiClusterHub, ocpConsole, isSTSEn
 	if m.Enabled(operatorsv1.MultiClusterObservability) {
 		nn = append(nn, types.NamespacedName{Name: "multicluster-observability-operator", Namespace: m.Namespace})
 	}
-	if m.Enabled(operatorsv1.ClusterPermission) {
-		nn = append(nn, types.NamespacedName{Name: "cluster-permission", Namespace: m.Namespace})
+	if m.Enabled(operatorsv1.FineGrainedRbac) {
+		nn = append(nn, types.NamespacedName{Name: "multicluster-role-assignment-controller", Namespace: m.Namespace})
 	}
-	if m.Enabled(operatorsv1.EdgeManagerPreview) {
-		nn = append(nn, types.NamespacedName{Name: "flightctl-api", Namespace: m.Namespace})
-		nn = append(nn, types.NamespacedName{Name: "flightctl-db", Namespace: m.Namespace})
-		nn = append(nn, types.NamespacedName{Name: "flightctl-ui", Namespace: m.Namespace})
-		nn = append(nn, types.NamespacedName{Name: "flightctl-periodic", Namespace: m.Namespace})
-		nn = append(nn, types.NamespacedName{Name: "flightctl-worker", Namespace: m.Namespace})
+	if m.Enabled(operatorsv1.MTVIntegrations) {
+		nn = append(nn, types.NamespacedName{Name: "mtv-integrations-controller", Namespace: m.Namespace})
 	}
+
 	return nn
 }
 
@@ -520,23 +330,6 @@ func Contains(s []string, e string) bool {
 		}
 	}
 	return false
-}
-
-func AppendProxyVariables(existing []corev1.EnvVar, added []corev1.EnvVar) []corev1.EnvVar {
-	for i := 0; i < len(added); i++ {
-		existing = appendIfMissing(existing, added[i])
-	}
-	return existing
-}
-
-func appendIfMissing(slice []corev1.EnvVar, s corev1.EnvVar) []corev1.EnvVar {
-	for i := 0; i < len(slice); i++ {
-		if slice[i].Name == s.Name {
-			slice[i].Value = s.Value
-			return slice
-		}
-	}
-	return append(slice, s)
 }
 
 // SetDefaultComponents returns true if changes are made
@@ -602,38 +395,30 @@ func deduplicate(config []operatorsv1.ComponentConfig) []operatorsv1.ComponentCo
 	return newConfig
 }
 
-// getMCEComponents returns mce components that are present in mch
+// GetMCEComponents returns mce components that are present in mch
 func GetMCEComponents(mch *operatorsv1.MultiClusterHub) []mcev1.ComponentConfig {
 	config := []mcev1.ComponentConfig{}
+
 	for _, n := range operatorsv1.MCEComponents {
+		/*
+			In MCE, some components have migrated from ACM to MCE for example, the Cluster Permission component
+			in ACM 2.17. If such a component is present in MCH, it should be added to the MCE config with the same
+			enabled status in order to ensure a smooth transition for users who have been using these components in ACM
+			and are now moving to MCE. By checking if the component is present in MCH and adding it to the MCE config,
+			we can ensure that users can continue to use these components without any disruption, even as they
+			transition to MCE.
+		*/
 		if mch.ComponentPresent(n) {
 			config = append(config, mcev1.ComponentConfig{Name: n, Enabled: mch.Enabled(n)})
 		}
 	}
+
 	if mch.Spec.DisableHubSelfManagement {
 		config = append(config, mcev1.ComponentConfig{Name: operatorsv1.MCELocalCluster, Enabled: false})
 	} else {
 		config = append(config, mcev1.ComponentConfig{Name: operatorsv1.MCELocalCluster, Enabled: true})
 	}
 	return config
-}
-
-// UpdateMCEOverrides adds MCE componenets that are present in mch
-func UpdateMCEOverrides(mce *mcev1.MultiClusterEngine, mch *operatorsv1.MultiClusterHub) {
-	mceComponents := GetMCEComponents(mch)
-	for _, c := range mceComponents {
-		if c.Enabled {
-			mce.Enable(c.Name)
-		} else {
-			mce.Disable(c.Name)
-		}
-	}
-	if mch.Spec.DisableHubSelfManagement {
-		mce.Disable(operatorsv1.MCELocalCluster)
-
-	} else {
-		mce.Enable(operatorsv1.MCELocalCluster)
-	}
 }
 
 // IsCommunityMode returns true if operator is running in community mode
@@ -645,4 +430,106 @@ func IsCommunityMode() bool {
 		// other option is "stolostron"
 		return true
 	}
+}
+
+// GetAPIServerTLSProfile retrieves the TLS security profile from the OpenShift APIServer resource.
+// Returns the TLSProfileSpec containing minTLSVersion and ciphers.
+// If no profile is set, returns the default Intermediate profile.
+func GetAPIServerTLSProfile(ctx context.Context, cl client.Client) (*configv1.TLSProfileSpec, error) {
+	// If running in unit test mode, return default Intermediate profile
+	if val, ok := os.LookupEnv(UnitTestEnvVar); ok && val == "true" {
+		return configv1.TLSProfiles[configv1.TLSProfileIntermediateType], nil
+	}
+
+	apiServer := &configv1.APIServer{}
+	err := cl.Get(ctx, types.NamespacedName{Name: "cluster"}, apiServer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get APIServer resource: %w", err)
+	}
+
+	// If no TLS profile is set, use the default (Intermediate)
+	if apiServer.Spec.TLSSecurityProfile == nil {
+		return configv1.TLSProfiles[configv1.TLSProfileIntermediateType], nil
+	}
+
+	profile := apiServer.Spec.TLSSecurityProfile
+
+	// For predefined profiles (Old, Intermediate, Modern), use the map
+	if profileSpec, ok := configv1.TLSProfiles[profile.Type]; ok {
+		return profileSpec, nil
+	}
+
+	// For custom profile, return the inline spec
+	if profile.Type == configv1.TLSProfileCustomType && profile.Custom != nil {
+		return &profile.Custom.TLSProfileSpec, nil
+	}
+
+	// Fallback to Intermediate if something unexpected
+	return configv1.TLSProfiles[configv1.TLSProfileIntermediateType], nil
+}
+
+// ConvertTLSVersion converts OpenShift TLSProtocolVersion string to crypto/tls uint16 constant.
+// Returns tls.VersionTLS12 as default if the version string is not recognized.
+func ConvertTLSVersion(version configv1.TLSProtocolVersion) uint16 {
+	switch version {
+	case configv1.VersionTLS10:
+		return tls.VersionTLS10
+	case configv1.VersionTLS11:
+		return tls.VersionTLS11
+	case configv1.VersionTLS12:
+		return tls.VersionTLS12
+	case configv1.VersionTLS13:
+		return tls.VersionTLS13
+	default:
+		// Default to TLS 1.2 for safety
+		return tls.VersionTLS12
+	}
+}
+
+// ConvertCipherSuites converts OpenShift cipher suite names (OpenSSL format) to crypto/tls uint16 constants.
+// TLS 1.3 cipher suites are managed automatically by Go and cannot be configured, so they are filtered out.
+// Only returns cipher suites applicable to TLS ≤ 1.2.
+func ConvertCipherSuites(cipherNames []string) []uint16 {
+	// Mapping from OpenSSL cipher names to crypto/tls constants
+	// Only includes cipher suites that exist in Go's crypto/tls package
+	cipherMap := map[string]uint16{
+		// TLS 1.2 ECDHE ciphers (GCM and ChaCha20)
+		"ECDHE-RSA-AES128-GCM-SHA256":   tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		"ECDHE-RSA-AES256-GCM-SHA384":   tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		"ECDHE-ECDSA-AES128-GCM-SHA256": tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		"ECDHE-ECDSA-AES256-GCM-SHA384": tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		"ECDHE-RSA-CHACHA20-POLY1305":   tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+		"ECDHE-ECDSA-CHACHA20-POLY1305": tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+
+		// TLS 1.2 ECDHE ciphers (CBC)
+		"ECDHE-RSA-AES128-SHA256":   tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+		"ECDHE-RSA-AES128-SHA":      tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+		"ECDHE-ECDSA-AES128-SHA256": tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+		"ECDHE-ECDSA-AES128-SHA":    tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+		"ECDHE-RSA-AES256-SHA":      tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+		"ECDHE-ECDSA-AES256-SHA":    tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+
+		// RSA ciphers
+		"AES128-GCM-SHA256": tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+		"AES256-GCM-SHA384": tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+		"AES128-SHA256":     tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
+		"AES128-SHA":        tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+		"AES256-SHA":        tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+		"DES-CBC3-SHA":      tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+	}
+
+	var result []uint16
+	for _, name := range cipherNames {
+		// Skip TLS 1.3 cipher suites (they start with TLS_ prefix and are auto-managed)
+		if len(name) > 4 && name[:4] == "TLS_" {
+			continue
+		}
+
+		if cipher, ok := cipherMap[name]; ok {
+			result = append(result, cipher)
+		}
+		// Silently skip unsupported cipher suites - Go may not support all OpenSSL ciphers
+	}
+
+	return result
 }

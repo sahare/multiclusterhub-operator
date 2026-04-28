@@ -21,7 +21,6 @@ import (
 	"github.com/stolostron/multiclusterhub-operator/pkg/helpers"
 	"github.com/stolostron/multiclusterhub-operator/pkg/multiclusterengine"
 	"github.com/stolostron/multiclusterhub-operator/pkg/multiclusterengineutils"
-	renderer "github.com/stolostron/multiclusterhub-operator/pkg/rendering"
 	"github.com/stolostron/multiclusterhub-operator/pkg/utils"
 	resources "github.com/stolostron/multiclusterhub-operator/test/unit-tests"
 	searchv2v1alpha1 "github.com/stolostron/search-v2-operator/api/v1alpha1"
@@ -41,7 +40,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -71,8 +69,21 @@ var (
 	recon      = MultiClusterHubReconciler{
 		Client: fake.NewClientBuilder().Build(),
 		Scheme: scheme.Scheme,
+		CacheSpec: CacheSpec{
+			ImageOverrides:    getTestImageOverrides(),
+			TemplateOverrides: map[string]string{},
+		},
 	}
 )
+
+// getTestImageOverrides returns a map of test image overrides for all components
+func getTestImageOverrides() map[string]string {
+	testImages := map[string]string{}
+	for _, v := range utils.GetTestImages() {
+		testImages[v] = "quay.io/test/test:Test"
+	}
+	return testImages
+}
 
 func ApplyPrereqs(k8sClient client.Client) {
 	ctx := context.Background()
@@ -755,17 +766,13 @@ var _ = Describe("MultiClusterHub controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 
-			// Appending to components rather than replacing with `Disable()`
-			createdMCH.Spec.Overrides.Components = append(
-				createdMCH.Spec.Overrides.Components,
-				operatorv1.ComponentConfig{Name: operatorv1.Console, Enabled: false},
-				operatorv1.ComponentConfig{Name: operatorv1.GRC, Enabled: false},
-				operatorv1.ComponentConfig{Name: operatorv1.Insights, Enabled: false},
-				operatorv1.ComponentConfig{Name: operatorv1.Search, Enabled: false},
-				operatorv1.ComponentConfig{Name: operatorv1.ClusterLifecycle, Enabled: false},
-				operatorv1.ComponentConfig{Name: operatorv1.MultiClusterObservability, Enabled: false},
-				operatorv1.ComponentConfig{Name: operatorv1.Volsync, Enabled: false},
-			)
+			createdMCH.Disable(operatorv1.Console)
+			createdMCH.Disable(operatorv1.GRC)
+			createdMCH.Disable(operatorv1.Insights)
+			createdMCH.Disable(operatorv1.Search)
+			createdMCH.Disable(operatorv1.ClusterLifecycle)
+			createdMCH.Disable(operatorv1.MultiClusterObservability)
+			createdMCH.Disable(operatorv1.Volsync)
 
 			Expect(k8sClient.Update(ctx, createdMCH)).Should(Succeed())
 
@@ -781,6 +788,38 @@ var _ = Describe("MultiClusterHub controller", func() {
 				_ = k8sClient.Update(ctx, createdMCH)
 
 				return utils.IsPaused(createdMCH)
+			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should migrate preview features to GA features", func() {
+			os.Setenv("OPERATOR_PACKAGE", "advanced-cluster-management")
+			defer os.Unsetenv("OPERATOR_PACKAGE")
+
+			By("Applying prereqs")
+			ctx := context.Background()
+			ApplyPrereqs(k8sClient)
+
+			By("Creating MCH with preview features enabled")
+			mch := resources.EmptyMCH()
+			mch.Spec.DisableHubSelfManagement = true
+			mch.Enable(operatorv1.MTVIntegrationsPreview)
+			mch.Enable(operatorv1.FineGrainedRbacPreview)
+
+			Expect(k8sClient.Create(ctx, &mch)).Should(Succeed())
+			Expect(k8sClient.Create(ctx, mchDeployment)).Should(Succeed())
+
+			By("Ensuring preview features are migrated to GA features")
+			createdMCH := &operatorv1.MultiClusterHub{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, resources.MCHLookupKey, createdMCH)
+				if err != nil {
+					return false
+				}
+				// Check that GA features are enabled and preview features are removed
+				return createdMCH.Enabled(operatorv1.MTVIntegrations) &&
+					!createdMCH.Enabled(operatorv1.MTVIntegrationsPreview) &&
+					createdMCH.Enabled(operatorv1.FineGrainedRbac) &&
+					!createdMCH.Enabled(operatorv1.FineGrainedRbacPreview)
 			}, timeout, interval).Should(BeTrue())
 		})
 	})
@@ -958,91 +997,6 @@ var _ = Describe("MultiClusterHub controller", func() {
 			result, err = reconciler.ensureOpenShiftNamespaceLabel(ctx, mch2)
 			Expect(result).To(Equal(ctrl.Result{}))
 			Expect(err).NotTo(BeNil())
-		})
-	})
-
-	Context("Legacy clean up tasks", func() {
-		It("Removes the legacy GRC Prometheus configuration", func() {
-			By("Applying prereqs")
-			ApplyPrereqs(k8sClient)
-
-			By("Creating the legacy GRC PrometheusRule and ServiceMonitor")
-			pr := &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"spec": map[string]interface{}{
-						"groups": []interface{}{
-							map[string]interface{}{
-								"name": "some-group",
-								"rules": []interface{}{
-									map[string]interface{}{
-										"expr": "something else",
-									},
-								},
-							},
-						},
-					},
-				},
-			}
-			pr.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   "monitoring.coreos.com",
-				Kind:    "PrometheusRule",
-				Version: "v1",
-			})
-			pr.SetName("ocm-grc-policy-propagator-metrics")
-			pr.SetNamespace("openshift-monitoring")
-
-			err := k8sClient.Create(context.TODO(), pr)
-			Expect(err).To(BeNil())
-
-			sm := &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"spec": map[string]interface{}{
-						"endpoints": []interface{}{
-							map[string]interface{}{
-								"path": "/some/path",
-							},
-						},
-						"selector": map[string]interface{}{
-							"matchLabels": map[string]interface{}{
-								"app": "grc",
-							},
-						},
-					},
-				},
-			}
-			sm.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   "monitoring.coreos.com",
-				Kind:    "ServiceMonitor",
-				Version: "v1",
-			})
-			sm.SetName("ocm-grc-policy-propagator-metrics")
-			sm.SetNamespace("openshift-monitoring")
-
-			err = k8sClient.Create(context.TODO(), sm)
-			Expect(err).To(BeNil())
-
-			legacyResourceKind := operatorv1.GetLegacyConfigKind()
-			ns := "openshift-monitoring"
-
-			By("Running the cleanup of the legacy configuration kinds")
-			for _, kind := range legacyResourceKind {
-				err = reconciler.removeLegacyConfigurations(context.TODO(), ns, kind)
-				Expect(err).To(BeNil())
-			}
-
-			By("Verifying that the legacy GRC PrometheusRule is deleted")
-			err = k8sClient.Get(context.TODO(), client.ObjectKeyFromObject(pr), pr)
-			Expect(errors.IsNotFound(err)).To(BeTrue())
-
-			By("Verifying that the legacy GRC ServiceMonitor is deleted")
-			err = k8sClient.Get(context.TODO(), client.ObjectKeyFromObject(sm), sm)
-			Expect(errors.IsNotFound(err)).To(BeTrue())
-
-			By("Running the cleanup of the legacy configuration again should do nothing")
-			for _, kind := range legacyResourceKind {
-				err = reconciler.removeLegacyConfigurations(context.TODO(), ns, kind)
-				Expect(err).To(BeNil())
-			}
 		})
 	})
 
@@ -1274,110 +1228,6 @@ func Test_verifyCRDExists(t *testing.T) {
 			}
 		})
 	}
-}
-
-func Test_equivalentKlusterletAddonConfig(t *testing.T) {
-	grcEnabled := true
-
-	mch := &operatorv1.MultiClusterHub{
-		ObjectMeta: metav1.ObjectMeta{Name: "mch", Namespace: "test-ns-1"},
-		Spec: operatorv1.MultiClusterHubSpec{
-			LocalClusterName: "local-cluster",
-			Overrides: &operatorv1.Overrides{
-				Components: []operatorv1.ComponentConfig{
-					{
-						Name:    operatorv1.GRC,
-						Enabled: true,
-					},
-				},
-			},
-		},
-	}
-
-	match := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "agent.open-cluster-management.io/v1",
-			"kind":       "KlusterletAddonConfig",
-			"metadata": map[string]interface{}{
-				"name":      mch.Spec.LocalClusterName,
-				"namespace": mch.Spec.LocalClusterName,
-			},
-			"spec": map[string]interface{}{
-				"applicationManager": map[string]interface{}{
-					"enabled": true,
-				},
-				"certPolicyController": map[string]interface{}{
-					"enabled": grcEnabled,
-				},
-				"policyController": map[string]interface{}{
-					"enabled": grcEnabled,
-				},
-				"searchCollector": map[string]interface{}{
-					"enabled": false,
-				},
-			},
-		},
-	}
-
-	notMatch := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "agent.open-cluster-management.io/v1",
-			"kind":       "KlusterletAddonConfig",
-			"metadata": map[string]interface{}{
-				"name":      mch.Spec.LocalClusterName,
-				"namespace": mch.Spec.LocalClusterName,
-			},
-			"spec": map[string]interface{}{
-				"applicationManager": map[string]interface{}{
-					"enabled": true,
-				},
-				"certPolicyController": map[string]interface{}{
-					"enabled": true,
-				},
-				"policyController": map[string]interface{}{
-					"enabled": true,
-				},
-				"searchCollector": map[string]interface{}{
-					"enabled": true,
-				},
-			},
-		},
-	}
-
-	t.Run("Should return isUpdate false when label does not exist", func(t *testing.T) {
-		isEquivalent, _, err := equivalentKlusterletAddonConfig(getKlusterletAddonConfig(mch), match, mch)
-		if err != nil {
-			t.Errorf("equivalentKlusterletAddonConfig has error: %v", err)
-		}
-
-		if isEquivalent {
-			t.Errorf("isEquivalent should be false")
-		}
-	})
-
-	t.Run("Should return isUpdate true when label exists", func(t *testing.T) {
-		utils.AddInstallerLabel(match, mch.GetName(), mch.GetNamespace())
-		isEquivalent, _, err := equivalentKlusterletAddonConfig(getKlusterletAddonConfig(mch), match, mch)
-		if err != nil {
-			t.Errorf("equivalentKlusterletAddonConfig has error: %v", err)
-		}
-
-		if !isEquivalent {
-			t.Errorf("isEquivalent should be true")
-		}
-	})
-
-	t.Run("Should return isUpdate false when not match", func(t *testing.T) {
-		utils.AddInstallerLabel(notMatch, mch.GetName(), mch.GetNamespace())
-		isEquivalent, _, err := equivalentKlusterletAddonConfig(getKlusterletAddonConfig(mch), notMatch, mch)
-		if err != nil {
-			t.Errorf("equivalentKlusterletAddonConfig has error: %v", err)
-		}
-
-		if isEquivalent {
-			t.Errorf("isEquivalent should be false")
-		}
-	})
 }
 
 func Test_ensureNamespaceAndPullSecret(t *testing.T) {
@@ -2080,73 +1930,6 @@ func Test_SetDefaultStorageClassName(t *testing.T) {
 
 			if got := os.Getenv(helpers.DefaultStorageClassName); got != tt.expectedEnv {
 				t.Errorf("Expected StorageClassName to be set to: %v, got: %v", tt.expectedEnv, got)
-			}
-		})
-	}
-}
-
-func Test_ApplyTemplate(t *testing.T) {
-	tests := []struct {
-		name             string
-		chartLocation    string
-		component        string
-		mch              *operatorv1.MultiClusterHub
-		storageClassName string
-		want             error
-	}{
-		{
-			name:             "should apply template for component",
-			chartLocation:    filepath.Join("../pkg/templates/", utils.EdgeManagerChartLocation),
-			component:        operatorv1.EdgeManagerPreview,
-			mch:              &operatorv1.MultiClusterHub{},
-			storageClassName: "gp2-csi",
-			want:             nil,
-		},
-	}
-
-	testImages := map[string]string{}
-	for _, v := range utils.GetTestImages() {
-		testImages[v] = "quay.io/test/test:Test"
-	}
-
-	testCacheSpec := CacheSpec{
-		ImageOverrides:    testImages,
-		TemplateOverrides: map[string]string{},
-	}
-
-	// Renders all templates from charts
-	registerScheme()
-	os.Setenv("ACM_HUB_OCP_VERSION", "4.18.0")
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			templates, errs := renderer.RenderChart(tt.chartLocation, tt.mch, testCacheSpec.ImageOverrides,
-				testCacheSpec.TemplateOverrides, false)
-
-			if errs != nil {
-				t.Errorf("Failed to render chart for %v", tt.component)
-			}
-
-			for _, template := range templates {
-				if _, err := recon.applyTemplate(context.TODO(), tt.mch, template); err != nil {
-					t.Errorf("failed: %v", err)
-				}
-			}
-
-			os.Setenv(helpers.DefaultStorageClassName, "gp3-csi")
-			templates, errs = renderer.RenderChart(tt.chartLocation, tt.mch, testCacheSpec.ImageOverrides,
-				testCacheSpec.TemplateOverrides, false)
-
-			if errs != nil {
-				t.Errorf("Failed to render chart for %v", tt.component)
-			}
-
-			for _, template := range templates {
-				if template.GetKind() == "PersistentVolumeClaim" || template.GetKind() == "StatefulSet" {
-					if _, err := recon.applyTemplate(context.TODO(), tt.mch, template); err != nil {
-						t.Errorf("applyTemplate() = %v, want = %v", err, tt.want)
-					}
-				}
 			}
 		})
 	}

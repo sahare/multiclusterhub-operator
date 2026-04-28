@@ -32,7 +32,6 @@ var chartPaths = []string{
 	utils.GRCChartLocation,
 	utils.ConsoleChartLocation,
 	utils.VolsyncChartLocation,
-	utils.EdgeManagerChartLocation,
 }
 
 func TestRender(t *testing.T) {
@@ -398,4 +397,153 @@ func TestOADPAnnotation(t *testing.T) {
 		t.Error("Cluster Backup missing OADP overrides for stable channel on ocp 5.1.0")
 	}
 
+}
+
+func TestParseProbeConfigFromAnnotations(t *testing.T) {
+	t.Run("No annotations returns nil", func(t *testing.T) {
+		mch := &v1.MultiClusterHub{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mch",
+				Namespace: "default",
+			},
+		}
+
+		result := parseProbeConfigFromAnnotations(mch)
+		if result != nil {
+			t.Error("Expected nil when no annotations present")
+		}
+	})
+
+	t.Run("All three annotations are parsed correctly", func(t *testing.T) {
+		mch := &v1.MultiClusterHub{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mch",
+				Namespace: "default",
+				Annotations: map[string]string{
+					utils.AnnotationProbeTimeoutSeconds:   "10",
+					utils.AnnotationProbeFailureThreshold: "5",
+					utils.AnnotationProbeSuccessThreshold: "2",
+				},
+			},
+		}
+
+		result := parseProbeConfigFromAnnotations(mch)
+		if result == nil {
+			t.Fatal("Expected ProbeConfig, got nil")
+		}
+
+		if result.TimeoutSeconds == nil || *result.TimeoutSeconds != 10 {
+			t.Errorf("Expected TimeoutSeconds=10, got %v", result.TimeoutSeconds)
+		}
+		if result.FailureThreshold == nil || *result.FailureThreshold != 5 {
+			t.Errorf("Expected FailureThreshold=5, got %v", result.FailureThreshold)
+		}
+		if result.SuccessThreshold == nil || *result.SuccessThreshold != 2 {
+			t.Errorf("Expected SuccessThreshold=2, got %v", result.SuccessThreshold)
+		}
+	})
+
+	t.Run("Partial annotations are parsed correctly", func(t *testing.T) {
+		mch := &v1.MultiClusterHub{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mch",
+				Namespace: "default",
+				Annotations: map[string]string{
+					utils.AnnotationProbeTimeoutSeconds: "15",
+				},
+			},
+		}
+
+		result := parseProbeConfigFromAnnotations(mch)
+		if result == nil {
+			t.Fatal("Expected ProbeConfig, got nil")
+		}
+
+		if result.TimeoutSeconds == nil || *result.TimeoutSeconds != 15 {
+			t.Errorf("Expected TimeoutSeconds=15, got %v", result.TimeoutSeconds)
+		}
+		if result.FailureThreshold != nil {
+			t.Errorf("Expected FailureThreshold=nil, got %v", *result.FailureThreshold)
+		}
+		if result.SuccessThreshold != nil {
+			t.Errorf("Expected SuccessThreshold=nil, got %v", *result.SuccessThreshold)
+		}
+	})
+
+	t.Run("Invalid values are ignored", func(t *testing.T) {
+		mch := &v1.MultiClusterHub{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mch",
+				Namespace: "default",
+				Annotations: map[string]string{
+					utils.AnnotationProbeTimeoutSeconds:   "not-a-number",
+					utils.AnnotationProbeFailureThreshold: "10",
+				},
+			},
+		}
+
+		result := parseProbeConfigFromAnnotations(mch)
+		if result == nil {
+			t.Fatal("Expected ProbeConfig, got nil")
+		}
+
+		if result.TimeoutSeconds != nil {
+			t.Errorf("Expected TimeoutSeconds=nil (invalid value), got %v", *result.TimeoutSeconds)
+		}
+		if result.FailureThreshold == nil || *result.FailureThreshold != 10 {
+			t.Errorf("Expected FailureThreshold=10, got %v", result.FailureThreshold)
+		}
+	})
+
+	t.Run("Zero and negative values are ignored", func(t *testing.T) {
+		mch := &v1.MultiClusterHub{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mch",
+				Namespace: "default",
+				Annotations: map[string]string{
+					utils.AnnotationProbeTimeoutSeconds:   "0",
+					utils.AnnotationProbeFailureThreshold: "-5",
+					utils.AnnotationProbeSuccessThreshold: "3",
+				},
+			},
+		}
+
+		result := parseProbeConfigFromAnnotations(mch)
+		if result == nil {
+			t.Fatal("Expected ProbeConfig, got nil")
+		}
+
+		if result.TimeoutSeconds != nil {
+			t.Errorf("Expected TimeoutSeconds=nil (zero value), got %v", *result.TimeoutSeconds)
+		}
+		if result.FailureThreshold != nil {
+			t.Errorf("Expected FailureThreshold=nil (negative value), got %v", *result.FailureThreshold)
+		}
+		if result.SuccessThreshold == nil || *result.SuccessThreshold != 3 {
+			t.Errorf("Expected SuccessThreshold=3, got %v", result.SuccessThreshold)
+		}
+	})
+
+	t.Run("Other annotations don't interfere", func(t *testing.T) {
+		mch := &v1.MultiClusterHub{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mch",
+				Namespace: "default",
+				Annotations: map[string]string{
+					"installer.open-cluster-management.io/pause": "true",
+					utils.AnnotationProbeTimeoutSeconds:          "20",
+					"some-other-annotation":                      "value",
+				},
+			},
+		}
+
+		result := parseProbeConfigFromAnnotations(mch)
+		if result == nil {
+			t.Fatal("Expected ProbeConfig, got nil")
+		}
+
+		if result.TimeoutSeconds == nil || *result.TimeoutSeconds != 20 {
+			t.Errorf("Expected TimeoutSeconds=20, got %v", result.TimeoutSeconds)
+		}
+	})
 }

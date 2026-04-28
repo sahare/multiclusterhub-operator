@@ -89,13 +89,38 @@ var (
 	/*
 		AnnotationFineGrainedRbac is an annotation used in the cluster to determine if fine grained rbac is enabled.
 	*/
-	AnnotationFineGrainedRbac = "fine-grained-rbac-preview"
+	AnnotationFineGrainedRbac = "fine-grained-rbac"
 
 	/*
 		AnnotationEditable is an annotation used on specific resources deployed by the hub to mark them as able
 		to be ended by customer without being overridden.
 	*/
 	AnnotationEditable = "installer.open-cluster-management.io/is-editable"
+
+	/*
+		AnnotationResourceAdoptionPolicy is an annotation used in multiclusterhub to control how the operator
+		handles existing resources without installer labels.
+		Valid values: "Strict" (default) - only manage labeled resources, "Adopt" - adopt unlabeled resources.
+	*/
+	AnnotationResourceAdoptionPolicy = "installer.open-cluster-management.io/resource-adoption-policy"
+
+	/*
+		AnnotationProbeTimeoutSeconds is an annotation used to configure probe timeout in seconds for exec probes
+		in components deployed by multiclusterhub.
+	*/
+	AnnotationProbeTimeoutSeconds = "installer.open-cluster-management.io/probe-timeout-seconds"
+
+	/*
+		AnnotationProbeFailureThreshold is an annotation used to configure probe failure threshold for exec probes
+		in components deployed by multiclusterhub.
+	*/
+	AnnotationProbeFailureThreshold = "installer.open-cluster-management.io/probe-failure-threshold"
+
+	/*
+		AnnotationProbeSuccessThreshold is an annotation used to configure probe success threshold for exec probes
+		in components deployed by multiclusterhub.
+	*/
+	AnnotationProbeSuccessThreshold = "installer.open-cluster-management.io/probe-success-threshold"
 )
 
 /*
@@ -135,15 +160,92 @@ func IsTemplateAnnotationTrue(instance *unstructured.Unstructured, annotationKey
 /*
 AnnotationsMatch checks if all specified annotations in the 'old' map match the corresponding ones in the 'new' map.
 It returns true if all annotations match, otherwise false.
+This function:
+1. Checks if specific important annotations changed (explicit tracking)
+2. Checks if any annotation was added or removed (allows manual triggering)
+3. Ignores value changes to non-important annotations (reduces unnecessary reconciles)
 */
 func AnnotationsMatch(old, new map[string]string) bool {
-	return getAnnotationOrDefaultForMap(old, new, AnnotationMCHPause, DeprecatedAnnotationMCHPause) &&
-		getAnnotationOrDefaultForMap(old, new, AnnotationImageRepo, DeprecatedAnnotationImageRepo) &&
-		getAnnotationOrDefaultForMap(old, new, AnnotationImageOverridesCM, DeprecatedAnnotationImageOverridesCM) &&
-		getAnnotationOrDefaultForMap(old, new, AnnotationKubeconfig, DeprecatedAnnotationKubeconfig) &&
-		getAnnotationOrDefaultForMap(old, new, AnnotationTemplateOverridesCM, "") &&
-		getAnnotationOrDefaultForMap(old, new, AnnotationMCESubscriptionSpec, "") &&
-		getAnnotationOrDefaultForMap(old, new, AnnotationOADPSubscriptionSpec, "")
+	// First check if specific important annotations changed
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationMCHPause, DeprecatedAnnotationMCHPause) {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationImageRepo, DeprecatedAnnotationImageRepo) {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationImageOverridesCM, DeprecatedAnnotationImageOverridesCM) {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationKubeconfig, DeprecatedAnnotationKubeconfig) {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationTemplateOverridesCM, "") {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationMCESubscriptionSpec, "") {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationOADPSubscriptionSpec, "") {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationResourceAdoptionPolicy, "") {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationProbeTimeoutSeconds, "") {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationProbeFailureThreshold, "") {
+		return false
+	}
+	if !getAnnotationOrDefaultForMap(old, new, AnnotationProbeSuccessThreshold, "") {
+		return false
+	}
+
+	// Track which keys we've already checked semantically to avoid double-counting
+	checkedKeys := map[string]bool{
+		AnnotationMCHPause:                   true,
+		AnnotationImageRepo:                  true,
+		AnnotationImageOverridesCM:           true,
+		AnnotationKubeconfig:                 true,
+		AnnotationTemplateOverridesCM:        true,
+		AnnotationMCESubscriptionSpec:        true,
+		AnnotationOADPSubscriptionSpec:       true,
+		AnnotationResourceAdoptionPolicy:     true,
+		AnnotationProbeTimeoutSeconds:        true,
+		AnnotationProbeFailureThreshold:      true,
+		AnnotationProbeSuccessThreshold:      true,
+		DeprecatedAnnotationMCHPause:         true,
+		DeprecatedAnnotationImageRepo:        true,
+		DeprecatedAnnotationImageOverridesCM: true,
+		DeprecatedAnnotationKubeconfig:       true,
+	}
+
+	// Filter to only unchecked annotations
+	oldUnchecked := make(map[string]string)
+	for k, v := range old {
+		if !checkedKeys[k] {
+			oldUnchecked[k] = v
+		}
+	}
+	newUnchecked := make(map[string]string)
+	for k, v := range new {
+		if !checkedKeys[k] {
+			newUnchecked[k] = v
+		}
+	}
+
+	// Check if any unchecked annotation was added or removed (allows manual triggering)
+	// Don't check values, just keys - value changes to non-important annotations are ignored
+	if len(oldUnchecked) != len(newUnchecked) {
+		return false
+	}
+	for k := range oldUnchecked {
+		if _, exists := newUnchecked[k]; !exists {
+			return false
+		}
+	}
+
+	return true
 }
 
 /*

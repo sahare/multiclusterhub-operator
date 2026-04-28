@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.20.0
   creationTimestamp: null
   name: submarinerconfigs.submarineraddon.open-cluster-management.io
 spec:
@@ -44,6 +44,10 @@ spec:
               Debug:
                 default: false
                 description: Debug enables Submariner debugging (in the logs).
+                type: boolean
+              IPSecCertAuthMode:
+                default: false
+                description: IPSecCertAuthMode enables certificate-based authentication mode for IPSec instead of PSK.
                 type: boolean
               IPSecDebug:
                 default: false
@@ -107,11 +111,11 @@ spec:
                       If the platform of managed cluster is not Amazon Web Services, this field will be ignored.
                     properties:
                       instanceType:
-                        default: m5n.large
+                        default: m5.xlarge
                         description: |-
                           InstanceType represents the Amazon Web Services EC2 instance type of the gateway node that will be
                           created on the managed cluster.
-                          The default value is `m5n.large`.
+                          The default value is `m5.xlarge`.
                         type: string
                     type: object
                   azure:
@@ -198,6 +202,7 @@ spec:
                   submarinerNetworkPluginSyncerImagePullSpec:
                     description: |-
                       SubmarinerNetworkPluginSyncerImagePullSpec represents the desired image of the submariner networkplugin syncer.
+
                       Deprecated: The networkplugin syncer was removed in v0.16.0.
                     type: string
                   submarinerRouteAgentImagePullSpec:

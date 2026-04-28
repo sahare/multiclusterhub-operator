@@ -1,7 +1,8 @@
 # Copyright (c) 2020 Red Hat, Inc.
 
 global:
-  imageOverrides: {}
+  imageOverrides:
+    multicluster_role_assignment: quay.io/stolostron/multicluster-role-assignment:latest
   templateOverrides: {}
   namespace: default
   pullSecret: null
@@ -12,4 +13,5 @@ hubconfig:
   replicaCount: 1
   tolerations: []
   ocpVersion: 4.12.0
+  probeConfig: null
 org: open-cluster-management

@@ -65,8 +65,7 @@ spec:
           value: multicluster-operators-placementrule
         - name: OPERATOR_NAME
           value: multicluster-operators-application
-        image: '{{ .Values.global.imageOverrides.multicluster_operators_subscription
-          }}'
+        image: '{{ .Values.global.imageOverrides.multicluster_operators_subscription }}'
         imagePullPolicy: '{{ .Values.global.pullPolicy }}'
         livenessProbe:
           exec:
@@ -74,6 +73,12 @@ spec:
             - ls
           initialDelaySeconds: 30
           periodSeconds: 30
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
         name: multicluster-operators-placementrule
         readinessProbe:
           exec:
@@ -81,6 +86,15 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "successThreshold") }}
+          successThreshold: {{ .Values.hubconfig.probeConfig.successThreshold }}
+{{- end }}
         resources:
           requests:
             cpu: 300m
@@ -132,6 +146,12 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
         name: multicluster-operators-gitopscluster
         readinessProbe:
           exec:
@@ -139,6 +159,15 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "successThreshold") }}
+          successThreshold: {{ .Values.hubconfig.probeConfig.successThreshold }}
+{{- end }}
         resources:
           requests:
             cpu: 25m
@@ -182,8 +211,7 @@ spec:
           value: multicluster-operators-application
         - name: OPERATOR_NAME
           value: multicluster-operators-application
-        image: '{{ .Values.global.imageOverrides.multicluster_operators_application
-          }}'
+        image: '{{ .Values.global.imageOverrides.multicluster_operators_application }}'
         imagePullPolicy: '{{ .Values.global.pullPolicy }}'
         livenessProbe:
           exec:
@@ -191,6 +219,12 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
         name: multicluster-operators-application
         ports:
         - containerPort: 9442
@@ -202,6 +236,15 @@ spec:
             - ls
           initialDelaySeconds: 15
           periodSeconds: 15
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "timeoutSeconds") }}
+          timeoutSeconds: {{ .Values.hubconfig.probeConfig.timeoutSeconds }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "failureThreshold") }}
+          failureThreshold: {{ .Values.hubconfig.probeConfig.failureThreshold }}
+{{- end }}
+{{- if and .Values.hubconfig.probeConfig (hasKey .Values.hubconfig.probeConfig "successThreshold") }}
+          successThreshold: {{ .Values.hubconfig.probeConfig.successThreshold }}
+{{- end }}
         resources:
           requests:
             cpu: 25m

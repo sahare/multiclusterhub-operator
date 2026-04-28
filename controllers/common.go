@@ -28,17 +28,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/stolostron/multiclusterhub-operator/pkg/multiclusterengineutils"
+	renderer "github.com/stolostron/multiclusterhub-operator/pkg/rendering"
 	utils "github.com/stolostron/multiclusterhub-operator/pkg/utils"
-	rbacv1 "k8s.io/api/rbac/v1"
 
 	operatorv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
 	"github.com/stolostron/multiclusterhub-operator/pkg/multiclusterengine"
 	"github.com/stolostron/multiclusterhub-operator/pkg/version"
 
-	mceutils "github.com/stolostron/backplane-operator/pkg/utils"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -57,171 +55,8 @@ type CacheSpec struct {
 	TemplateOverridesCM string
 }
 
-func (r *MultiClusterHubReconciler) deleteEdgeManagerResources(ctx context.Context, m *operatorv1.MultiClusterHub) (ctrl.Result, error) {
-	// List of resource names and types to delete
-	namespacedResources := []struct {
-		kind      string
-		name      string
-		namespace string
-	}{
-		{"Secret", "flightctl-db-secret", m.GetNamespace()},
-		{"Secret", "flightctl-kv-secret", m.GetNamespace()},
-		{"Secret", "flightctl-db-admin-secret", m.GetNamespace()},
-		{"Secret", "flightctl-db-app-secret", m.GetNamespace()},
-		{"Secret", "flightctl-db-migration-secret", m.GetNamespace()},
-		{"PersistentVolumeClaim", "flightctl-kv-data-flightctl-kv-0", m.GetNamespace()},
-		{"PersistentVolumeClaim", "flightctl-alertmanager-data-flightctl-alertmanager-0", m.GetNamespace()},
-	}
-
-	for _, resource := range namespacedResources {
-		switch resource.kind {
-		// Delete Secrets
-		case "Secret":
-			err := r.deleteSecret(ctx, m, resource.name, resource.namespace)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-		case "PersistentVolumeClaim":
-			// Delete PersistentVolumeClaim
-			err := r.deletePVC(ctx, resource.name, resource.namespace)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-	}
-
-	clusterScopedResources := []struct {
-		kind string
-		name string
-	}{
-		{"ClusterRole", "flightctl-client"},
-		{"ClusterRoleBinding", "flightctl-agent-registration"},
-		{"ClusterRoleBinding", "flightctl-client"},
-	}
-
-	for _, resource := range clusterScopedResources {
-		switch resource.kind {
-		case "ClusterRole":
-			if err := r.deleteClusterRole(ctx, resource.name); err != nil {
-				return ctrl.Result{}, err
-			}
-		case "ClusterRoleBinding":
-			if err := r.deleteClusterRoleBinding(ctx, resource.name); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-	}
-
-	pods := []struct {
-		namespace string
-		label     client.MatchingLabels
-	}{
-		{m.GetNamespace(), client.MatchingLabels{"flightctl.service": "secrets-job"}},
-		{m.GetNamespace(), client.MatchingLabels{"job-name": "flightctl-db-migration-1"}},
-	}
-
-	for _, pod := range pods {
-		// Delete Pod with label
-		err := r.deletePodWithLabel(ctx, pod.namespace, pod.label)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	return ctrl.Result{}, nil
-}
-
-func (r *MultiClusterHubReconciler) deleteClusterRole(ctx context.Context, name string) error {
-	clusterRole := &rbacv1.ClusterRole{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: name}, clusterRole); err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	if err := r.Client.Delete(ctx, clusterRole); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (r *MultiClusterHubReconciler) deleteClusterRoleBinding(ctx context.Context, name string) error {
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: name}, clusterRoleBinding); err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	if err := r.Client.Delete(ctx, clusterRoleBinding); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (r *MultiClusterHubReconciler) deleteSecret(ctx context.Context, m *operatorv1.MultiClusterHub, name, namespace string) error {
-	secret := &corev1.Secret{}
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, secret)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	err = r.Client.Delete(ctx, secret)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (r *MultiClusterHubReconciler) deletePVC(ctx context.Context, name, namespace string) error {
-	pvc := &corev1.PersistentVolumeClaim{}
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, pvc)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	err = r.Client.Delete(ctx, pvc)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (r *MultiClusterHubReconciler) deletePodWithLabel(ctx context.Context, namespace string, labelSelector client.MatchingLabels) error {
-	podList := &corev1.PodList{}
-
-	err := r.Client.List(ctx, podList, client.InNamespace(namespace), labelSelector)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	for _, pod := range podList.Items {
-		err := r.Client.Delete(ctx, &pod)
-		if err != nil {
-			if errors.IsNotFound(err) {
-				return nil
-			}
-			return err
-		}
-	}
-	return nil
+var migratedComponentDeployments = map[string]string{
+	operatorv1.ClusterPermission: "cluster-permission",
 }
 
 func (r *MultiClusterHubReconciler) ensureNoNamespace(m *operatorv1.MultiClusterHub, u *unstructured.Unstructured) (ctrl.Result, error) {
@@ -358,12 +193,6 @@ func (r *MultiClusterHubReconciler) ensureMultiClusterEngineCR(ctx context.Conte
 	mceannotations := mce.GetAnnotations()
 	if mceannotations == nil {
 		mceannotations = map[string]string{}
-	}
-
-	if m.Enabled(operatorv1.EdgeManagerPreview) {
-		mceannotations[mceutils.AnnotationEdgeManagerEnabled] = "true"
-	} else {
-		mceannotations[mceutils.AnnotationEdgeManagerEnabled] = "false"
 	}
 
 	mce.SetAnnotations(mceannotations)
@@ -714,7 +543,8 @@ func (r *MultiClusterHubReconciler) waitForMCEReady(ctx context.Context) (ctrl.R
 		err = version.ValidMCEVersion(existingMCE.Status.CurrentVersion)
 	}
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("MCE version requirement not met: %w", err)
+		r.Log.Info("Waiting for MCE upgrade to complete", "CurrentVersion", existingMCE.Status.CurrentVersion, "Reason", err.Error())
+		return ctrl.Result{RequeueAfter: resyncPeriod}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -869,33 +699,6 @@ func (r *MultiClusterHubReconciler) removePluginFromConsole(multiClusterHub *ope
 	return ctrl.Result{}, nil
 }
 
-// AssistedServiceConfigured returns true if assisted service has already been installed
-// and configured in the hub namespace
-func AssistedServiceConfigured(ctx context.Context, client client.Client) (bool, error) {
-	agentServiceCRD := &apixv1.CustomResourceDefinition{}
-	err := client.Get(ctx, types.NamespacedName{Name: "agentserviceconfigs.agent-install.openshift.io"}, agentServiceCRD)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	// CRD exists, check for instance
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "agent-install.openshift.io",
-		Version: "v1beta1",
-		Kind:    "AgentServiceConfigList",
-	})
-	if err := client.List(ctx, list); err != nil {
-		return false, fmt.Errorf("unable to list AgentServiceConfigs: %s", err)
-	}
-	if len(list.Items) > 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
 // return current OCP version from clusterversion resource
 // equivalent to `oc get clusterversion version -o=jsonpath='{.status.history[0].version}'`
 func (r *MultiClusterHubReconciler) getClusterVersion(ctx context.Context) (string, error) {
@@ -930,7 +733,7 @@ func (r *MultiClusterHubReconciler) ensureSearchCR(m *operatorv1.MultiClusterHub
 			Labels:    map[string]string{"cluster.open-cluster-management.io/backup": ""},
 			Annotations: map[string]string{
 				utils.AnnotationFineGrainedRbac: strconv.FormatBool(
-					m.Enabled(operatorv1.FineGrainedRbacPreview)),
+					m.Enabled(operatorv1.FineGrainedRbac)),
 			},
 		},
 		Spec: searchv2v1alpha1.SearchSpec{
@@ -1123,4 +926,314 @@ func (r *MultiClusterHubReconciler) GetInstallPlanApprovalFromSubscription(sub *
 		return subv1alpha1.ApprovalAutomatic // Default fallback
 	}
 	return sub.Spec.InstallPlanApproval
+}
+
+/*
+waitForMigratedComponentsAdopted verifies that MCE has successfully adopted and deployed
+all components that have been migrated from MCH to MCE. This prevents a migration gap
+where we delete MCH-owned resources before MCE has finished deploying its version.
+*/
+func (r *MultiClusterHubReconciler) waitForMigratedComponentsAdopted(ctx context.Context,
+	m *operatorv1.MultiClusterHub) (bool, error) {
+
+	// List of components migrated from MCH to MCE
+	migratedComponents := migratedComponentDeployments
+
+	// Get the managed MCE instance
+	mce, err := multiclusterengineutils.GetManagedMCE(ctx, r.Client)
+	if err != nil {
+		return false, fmt.Errorf("failed to get managed MCE: %w", err)
+	}
+	if mce == nil {
+		r.Log.Info("MCE not found, waiting for MCE to be created")
+		return false, nil
+	}
+
+	// Check each migrated component to ensure its deployment is available in MCE
+	for mchComponent, mceDeploymentName := range migratedComponents {
+		// Skip if this component isn't enabled in MCH (nothing to adopt before cleanup)
+		if !m.ComponentPresent(mchComponent) || !m.Enabled(mchComponent) {
+			continue
+		}
+
+		// Look for the deployment in MCE status and verify it's available
+		deploymentAvailable := false
+		for _, comp := range mce.Status.Components {
+			// Check for deployment with matching name, type Available, and status True
+			if comp.Kind == "Deployment" &&
+				comp.Name == mceDeploymentName &&
+				comp.Type == "Available" &&
+				comp.Status == "True" {
+				deploymentAvailable = true
+				r.Log.Info("Migrated component deployment is available in MCE",
+					"MCHComponent", mchComponent,
+					"MCEDeployment", mceDeploymentName,
+					"Reason", comp.Reason)
+				break
+			}
+		}
+
+		if !deploymentAvailable {
+			r.Log.Info("Waiting for migrated component deployment to be available in MCE",
+				"MCHComponent", mchComponent,
+				"MCEDeployment", mceDeploymentName)
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// transferClusterResourcesToMCE relabels all cluster-scoped resources from MCH to MCE ownership.
+// MCE will then update the resources to match its desired state.
+func (r *MultiClusterHubReconciler) transferClusterResourcesToMCE(ctx context.Context, m *operatorv1.MultiClusterHub,
+	component string, cachespec CacheSpec, isSTSEnabled bool) (ctrl.Result, error) {
+
+	mce, err := multiclusterengineutils.GetManagedMCE(ctx, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if mce == nil {
+		r.Log.Info("MCE not found, cannot transfer cluster resources", "Component", component)
+		return ctrl.Result{RequeueAfter: resyncPeriod}, nil
+	}
+
+	chartLocation := r.fetchChartLocation(component)
+	templates, errs := renderer.RenderChart(chartLocation, m, cachespec.ImageOverrides, cachespec.TemplateOverrides, isSTSEnabled)
+	if len(errs) > 0 {
+		for _, err := range errs {
+			r.Log.Info(fmt.Sprintf("Error rendering chart for resource transfer: %s", err.Error()), "Component", component)
+		}
+		return ctrl.Result{RequeueAfter: resyncPeriod}, nil
+	}
+
+	for _, template := range templates {
+		// Only process cluster-scoped resources (no namespace)
+		if template.GetNamespace() != "" {
+			continue
+		}
+
+		kind := template.GetKind()
+		name := template.GetName()
+		existing := template.DeepCopy()
+		err := r.Client.Get(ctx, types.NamespacedName{Name: name}, existing)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				r.Log.Info("Resource not found, skipping transfer", "Kind", kind, "Name", name)
+				continue
+			}
+			return ctrl.Result{}, err
+		}
+
+		// Skip if already transferred to the current MCE
+		labels := existing.GetLabels()
+		if labels != nil && labels["backplaneconfig.name"] == mce.GetName() {
+			r.Log.Info("Resource already transferred to current MCE, skipping",
+				"Kind", kind,
+				"Name", name,
+				"MCEName", mce.GetName())
+			continue
+		}
+
+		// Only relabel resources owned by this MCH or with stale MCE labels
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		mchOwned := labels["installer.name"] == m.GetName() && labels["installer.namespace"] == m.GetNamespace()
+		staleMCELabel := labels["backplaneconfig.name"] != "" && labels["backplaneconfig.name"] != mce.GetName()
+
+		if !mchOwned && !staleMCELabel {
+			r.Log.Info("Resource not owned by this MCH, skipping transfer",
+				"Kind", kind,
+				"Name", name,
+				"InstallerName", labels["installer.name"],
+				"InstallerNamespace", labels["installer.namespace"],
+				"BackplaneconfigName", labels["backplaneconfig.name"])
+			continue
+		}
+
+		// Relabel: remove MCH labels, add MCE labels
+		delete(labels, "installer.name")
+		delete(labels, "installer.namespace")
+		labels["backplaneconfig.name"] = mce.GetName()
+		existing.SetLabels(labels)
+
+		// Remove MCH annotations
+		annotations := existing.GetAnnotations()
+		if annotations != nil {
+			for key := range annotations {
+				if strings.HasPrefix(key, "installer.open-cluster-management.io/") {
+					delete(annotations, key)
+				}
+			}
+			existing.SetAnnotations(annotations)
+		}
+
+		if err := r.Client.Update(ctx, existing); err != nil {
+			r.Log.Info("Failed to transfer resource to MCE", "Kind", kind, "Name", name, "Error", err)
+			return ctrl.Result{}, err
+		}
+
+		r.Log.Info("Transferred resource to MCE ownership", "Kind", kind, "Name", name)
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// deleteNamespaceScopedResources deletes namespace-scoped resources (Deployment, ServiceAccount, etc.) for a component.
+// This is used after MCE has adopted cluster-scoped RBAC resources, to clean up remaining MCH resources.
+func (r *MultiClusterHubReconciler) deleteNamespaceScopedResources(ctx context.Context, m *operatorv1.MultiClusterHub,
+	component string, cachespec CacheSpec, isSTSEnabled bool) (ctrl.Result, error) {
+
+	return r.deleteResourcesByScope(ctx, m, component, cachespec, isSTSEnabled, false)
+}
+
+// deleteResourcesByScope deletes resources for a component based on scope.
+// If deleteClusterScoped is true, deletes only cluster-scoped RBAC resources (ClusterRole, ClusterRoleBinding).
+// If deleteClusterScoped is false, deletes only namespace-scoped resources (Deployment, ServiceAccount, etc.).
+// Note: For migrated components, cluster-scoped resources are now transferred (not deleted) via
+// transferClusterResourcesToMCE, so this function is primarily used for namespace-scoped cleanup.
+func (r *MultiClusterHubReconciler) deleteResourcesByScope(ctx context.Context, m *operatorv1.MultiClusterHub,
+	component string, cachespec CacheSpec, isSTSEnabled bool, deleteClusterScoped bool) (ctrl.Result, error) {
+
+	// Get chart location for this component
+	chartLocation := r.fetchChartLocation(component)
+
+	// Render templates to get all resources for this component
+	templates, errs := renderer.RenderChart(chartLocation, m, cachespec.ImageOverrides, cachespec.TemplateOverrides, isSTSEnabled)
+	if len(errs) > 0 {
+		for _, err := range errs {
+			r.Log.Info(fmt.Sprintf("Error rendering chart for resource deletion: %s", err.Error()), "Component", component)
+		}
+		return ctrl.Result{RequeueAfter: resyncPeriod}, nil
+	}
+
+	// Track if any resources are still present or terminating
+	resourcesRemaining := false
+
+	// Delete resources based on scope
+	for _, template := range templates {
+		isNamespaceScoped := template.GetNamespace() != ""
+
+		// Skip based on what we're deleting
+		if deleteClusterScoped && isNamespaceScoped {
+			continue // We want cluster-scoped, skip namespace-scoped
+		}
+		if !deleteClusterScoped && !isNamespaceScoped {
+			continue // We want namespace-scoped, skip cluster-scoped
+		}
+
+		// If deleting cluster-scoped, only delete RBAC resources
+		if deleteClusterScoped {
+			kind := template.GetKind()
+			if kind != "ClusterRole" && kind != "ClusterRoleBinding" {
+				continue
+			}
+		}
+
+		// Try to get existing resource
+		existing := template.DeepCopy()
+		err := r.Client.Get(ctx, types.NamespacedName{Name: existing.GetName(), Namespace: existing.GetNamespace()}, existing)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				r.Log.V(1).Info("Resource already deleted",
+					"Kind", template.GetKind(),
+					"Name", template.GetName(),
+					"Namespace", template.GetNamespace())
+				continue
+			}
+			return ctrl.Result{}, fmt.Errorf("failed to get resource %s/%s: %w", template.GetKind(), template.GetName(), err)
+		}
+
+		// Skip cluster-scoped resources that have been transferred to MCE ownership
+		if deleteClusterScoped {
+			labels := existing.GetLabels()
+			if labels != nil && labels["backplaneconfig.name"] != "" {
+				r.Log.Info("Skipping resource with MCE ownership",
+					"Kind", existing.GetKind(),
+					"Name", existing.GetName(),
+					"MCEName", labels["backplaneconfig.name"])
+				continue
+			}
+		}
+
+		// Check if resource is already being deleted
+		if existing.GetDeletionTimestamp() != nil {
+			r.Log.Info("Resource is terminating",
+				"Kind", existing.GetKind(),
+				"Name", existing.GetName(),
+				"Namespace", existing.GetNamespace())
+			resourcesRemaining = true
+			continue
+		}
+
+		r.Log.Info("Deleting resource",
+			"Kind", existing.GetKind(),
+			"Name", existing.GetName(),
+			"Namespace", existing.GetNamespace(),
+			"Component", component)
+
+		// Delete the resource
+		if err := r.Client.Delete(ctx, existing); err != nil {
+			if errors.IsNotFound(err) {
+				// Already deleted between Get and Delete
+				continue
+			}
+			return ctrl.Result{}, fmt.Errorf("failed to delete resource %s/%s: %w",
+				existing.GetKind(), existing.GetName(), err)
+		}
+		resourcesRemaining = true
+	}
+
+	// Requeue if resources are still present or terminating
+	if resourcesRemaining {
+		r.Log.Info("Waiting for resources to finish deleting", "Component", component)
+		return ctrl.Result{RequeueAfter: resyncPeriod}, nil
+	}
+
+	return ctrl.Result{}, nil
+}
+
+/*
+ensureMigratedComponentsCleanup handles cleanup of namespace-scoped resources for components migrated
+from MCH to MCE. This runs AFTER:
+1. Cluster-scoped resources have been relabeled with MCE ownership
+2. MCE has adopted those resources and shows the component as Available
+
+This function deletes namespace-scoped resources (Deployment, ServiceAccount, etc.) from the MCH namespace
+and prunes the component from the MCH CR.
+*/
+func (r *MultiClusterHubReconciler) ensureMigratedComponentsCleanup(ctx context.Context, m *operatorv1.MultiClusterHub,
+	isSTSEnabled bool) (ctrl.Result, error) {
+
+	updated := false
+	for component := range migratedComponentDeployments {
+		if m.ComponentPresent(component) {
+			r.Log.Info("Cleaning up migrated component namespace-scoped resources", "Component", component)
+
+			// Delete namespace-scoped resources (Deployment, ServiceAccount, etc.)
+			// Note: Cluster-scoped resources were relabeled earlier and adopted by MCE
+			result, err := r.deleteNamespaceScopedResources(ctx, m, component, r.CacheSpec, isSTSEnabled)
+			if result != (ctrl.Result{}) || err != nil {
+				return result, err
+			}
+
+			// Prune from MCH CR after successful cleanup
+			if m.Prune(component) {
+				r.Log.Info("Pruned migrated component from MCH CR", "Component", component)
+				updated = true
+			}
+		}
+	}
+
+	// Update MCH CR if any components were pruned
+	if updated {
+		if err := r.Client.Update(ctx, m); err != nil {
+			r.Log.Error(err, "Failed to update MCH CR after pruning migrated components")
+			return ctrl.Result{}, err
+		}
+		r.Log.Info("Successfully updated MCH CR after pruning migrated components")
+	}
+
+	return ctrl.Result{}, nil
 }
