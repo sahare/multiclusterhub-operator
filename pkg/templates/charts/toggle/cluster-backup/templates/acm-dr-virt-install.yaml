@@ -360,10 +360,15 @@ spec:
 
               {{ `{{- /* for managed clusters only, copy the oadp secret and install OADP  */ -}}` }}
               {{ `{{ if (not $is_hub) }}` }}
+                {{ `{{- /* Detect OLM version: check if ClusterExtension CRD exists (OLMv1) */ -}}` }}
+                {{ `{{- $ce_crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "clusterextensions.olm.operatorframework.io" }}` }}
+                {{ `{{- $is_olmv1 := eq $ce_crd.metadata.name "clusterextensions.olm.operatorframework.io" }}` }}
+
                 {{ `{{- /* use the subscription name and operator group from the existing OADP installation, if one exists in this ns  */ -}}` }}
                 {{ `{{- $subscription_name := "redhat-oadp-operator-subscription" }}` }}
                 {{ `{{- /* if another OADP version was installed don't try to install this version  */ -}}` }}
                 {{ `{{- $found_other_version := false }}` }}
+                {{ `{{ if not $is_olmv1 }}` }}
                 {{ `{{- range $ss := (lookup "operators.coreos.com/v1alpha1" "Subscription" "" "").items }}` }}
                   {{ `{{ if and (not $found_other_version) (eq $ss.spec.name "redhat-oadp-operator") }}` }}
                     {{ `{{ if eq $ss.spec.channel $oadp_channel }}` }}
@@ -377,10 +382,13 @@ spec:
                     {{ `{{- end }}` }}
                   {{ `{{- end }}` }}
                 {{ `{{- end }}` }}
+                {{ `{{- end }}` }}
 
                 {{ `{{- $operator_name := "redhat-oadp-operator-group" }}` }}
+                {{ `{{ if not $is_olmv1 }}` }}
                 {{ `{{- range $ops := (lookup "operators.coreos.com/v1" "OperatorGroup" $ns "").items }}` }}
                   {{ `{{- $operator_name = $ops.metadata.name }}` }}
+                {{ `{{- end }}` }}
                 {{ `{{- end }}` }}
 
                 {{ `{{ if not $found_other_version }}` }}
@@ -400,6 +408,53 @@ spec:
                     data: '{{ `{{hub copySecretData "" $cloud_creds_file_name hub}}` }}'
                   {{ `{{hub end hub}}` }}
 
+                {{ `{{ if $is_olmv1 }}` }}
+                  {{ `{{- /* OLMv1: use ClusterExtension instead of Subscription/OperatorGroup */ -}}` }}
+                - complianceType: musthave
+                  objectDefinition:
+                    apiVersion: v1
+                    kind: ServiceAccount
+                    metadata:
+                      name: oadp-installer
+                      namespace: {{ `{{ $ns }}` }}
+
+                - complianceType: musthave
+                  objectDefinition:
+                    apiVersion: rbac.authorization.k8s.io/v1
+                    kind: ClusterRoleBinding
+                    metadata:
+                      name: oadp-installer-admin
+                    roleRef:
+                      apiGroup: rbac.authorization.k8s.io
+                      kind: ClusterRole
+                      name: cluster-admin
+                    subjects:
+                    - kind: ServiceAccount
+                      name: oadp-installer
+                      namespace: {{ `{{ $ns }}` }}
+
+                - complianceType: musthave
+                  objectDefinition:
+                    apiVersion: olm.operatorframework.io/v1
+                    kind: ClusterExtension
+                    metadata:
+                      name: redhat-oadp-operator
+                    spec:
+                      namespace: {{ `{{ $ns }}` }}
+                      serviceAccount:
+                        name: oadp-installer
+                      source:
+                        sourceType: Catalog
+                        catalog:
+                          packageName: redhat-oadp-operator
+                          version: ">=1.4.0"
+                      config:
+                        configType: Inline
+                        inline:
+                          watchNamespace: {{ `{{ $ns }}` }}
+
+                {{ `{{- else }}` }}
+                  {{ `{{- /* OLMv0: use OperatorGroup + Subscription */ -}}` }}
                 - complianceType: musthave
                   objectDefinition:
                     apiVersion: operators.coreos.com/v1
@@ -460,6 +515,7 @@ spec:
                       {{ `{{- end }}` }}
                     {{ `{{- end }}` }}
                   {{ `{{- end }}` }}
+                {{ `{{- end }}` }}
 
                   {{ `{{- /* check if OADP CRD is installed  */ -}}` }}
                   {{ `{{- $dpa_crd_name := "dataprotectionapplications.oadp.openshift.io" }}` }}
